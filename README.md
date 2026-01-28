@@ -14,13 +14,22 @@ This project is intentionally lightweight and opinionated. It is designed as:
 ---
 
 ## ✨ What This Demo Shows
-
 - Operational health scoring (Green / Amber / Red)
 - Active vs resolved incident tracking
 - Incident lifecycle management (open → investigating → mitigated → resolved)
 - Timeline-based audit trail (status changes, notes, resolution context)
 - Simple KPI reporting (MTTR, resolution counts, top resolvers)
 - A clean, calm ops-focused UI (not a ticketing system clone)
+
+Lightweight Intelligence (AI-Assisted)
+This demo includes lightweight, explainable intelligence designed to support — not replace — operational decision-making.
+
+Current capabilities include:
+- AI-assisted incident triage (suggested priority, rationale, next steps)
+- Ranked “What to do next” operational recommendations based on system health
+- Deterministic, explainable logic suitable for high-trust ops environments
+
+The emphasis is on calm decision support and transparency rather than automation or opaque “AI magic”.
 
 This is **not** intended to be production-ready — it is a **conceptual ops demo**.
 
@@ -136,9 +145,9 @@ v1.0 — Stable local demo
 
 This version is considered complete for its current purpose.
 Future work may include:
-	•	Narrative explanations for health score changes
-	•	Actor attribution per timeline event
-	•	Lightweight AI-generated incident summaries
+• Narrative explanations for health score changes
+• Actor attribution per timeline event
+• AI-generated incident and timeline summaries (LLM-assisted)
 
 ⸻
 
