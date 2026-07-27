@@ -390,36 +390,23 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
             status_code=400,
             detail=f"Invalid status transition: {old_status} → {new_status}. Allowed: {allowed}",
         )
-     # OPTIONAL: priority change (log to timeline)
-    if payload.priority:
-        new_prio = normalize_priority(payload.priority)
-        old_prio = row["priority"]
-        if new_prio != old_prio:
-            add_timeline(conn, incident_id, "priority_changed", old_prio, new_prio)
-            conn.execute(
-                "UPDATE incidents SET priority = ?, updated_at = ? WHERE id = ?",
-                (new_prio, dt_to_iso(utcnow()), incident_id),
-            )
-            row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()   
-    # OPTIONAL: free-text note at any stage
-    if payload.note and payload.note.strip():
-        add_timeline(conn, incident_id, "note", None, payload.note.strip())
+
     now = utcnow()
 
-    # Start from current DB values (so partial patches work)
+    # Start from current DB values so partial patching works
+    priority = row["priority"]
     resolved_at = row["resolved_at"]
     resolved_by = row["resolved_by"]
     resolution_notes = row["resolution_notes"]
-    priority = row["priority"]
 
-    # Optional: priority change at any stage
+    # Optional: priority change
     if payload.priority is not None:
         new_prio = normalize_priority(payload.priority)
         if new_prio != priority:
-            add_timeline(conn, incident_id, "resolution_notes", None, resolution_notes)
+            add_timeline(conn, incident_id, "priority_changed", priority, new_prio)
             priority = new_prio
 
-    # Optional: add a free-text note at any stage (timeline only)
+    # Optional: free-text note at any stage
     if payload.note is not None and payload.note.strip():
         add_timeline(conn, incident_id, "note_added", None, payload.note.strip())
 
