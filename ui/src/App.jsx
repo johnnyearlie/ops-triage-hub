@@ -592,7 +592,7 @@ export default function App() {
 
             <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
               <div>
-                <Label>P0 resolved</Label>
+                <Label>Critical Priority Resolved</Label>
                 <div style={{ fontSize: 18, fontWeight: 900 }}>{kpis?.p0_resolved_count ?? "—"}</div>
               </div>
               <div>
@@ -602,7 +602,7 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <Label>Top resolvers</Label>
+                <Label>Top Assigned Resolvers</Label>
                 <div style={{ fontSize: 12, color: THEME.subtleText, paddingTop: 8 }}>
                   {topResolvers.length ? `${topResolvers[0].role} (${topResolvers[0].resolved})` : "—"}
                 </div>
@@ -611,7 +611,7 @@ export default function App() {
 
             <div style={{ marginTop: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                <div style={{ fontWeight: 900 }}>Resolvers</div>
+               <div style={{ fontWeight: 900 }}>Assigned Resolvers</div>
                 <div style={{ width: 220 }}>
                   <Select value={resolverFilter} onChange={setResolverFilter} options={resolverOptions} />
                 </div>
@@ -947,10 +947,7 @@ export default function App() {
           </Card>
         </div>
 
-        <div style={{ fontSize: 12, color: THEME.subtleText, paddingBottom: 12 }}>
-          Note: “Who opened/investigated/mitigated/closed” needs an actor field on each timeline event. Right now we
-          support the simplest path: <b>resolved_by</b> + timeline notes.
-        </div>
+       
       </div>
     </div>
   );
