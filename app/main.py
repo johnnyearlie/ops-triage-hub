@@ -195,34 +195,94 @@ def seed_realistic_incidents_if_empty() -> None:
     conn = db()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) AS c FROM incidents")
-    count = int(cur.fetchone()["c"])
-    if count > 0:
+    if int(cur.fetchone()["c"]) > 0:
         conn.close()
         return
 
     now = utcnow()
-    examples = [
-        ("Checkout failing for DE customers", "Spike in 500s on /checkout for DE. Suspect recent release.", "P0", "open", now - timedelta(hours=3)),
-        ("eSIM activation delays", "Activation API returning 202 for >10 minutes. Users stuck on pending.", "P1", "open", now - timedelta(hours=6)),
-        ("Billing portal slow", "Billing portal latency > 3s for EU region. DB contention suspected.", "P2", "open", now - timedelta(days=2, hours=5)),
-        ("Support queue backlog", "Support queue building; SLA at risk for low priority tickets.", "P3", "open", now - timedelta(days=1, hours=2)),
-        ("Partner webhook retries", "Partner webhook endpoint returns intermittent 429; retries causing duplicates.", "P2", "open", now - timedelta(days=4)),
-        ("Roaming profile mismatch", "Roaming profile mismatch for subset of devices. Needs manual correction.", "P1", "open", now - timedelta(days=3, hours=8)),
-        ("Payment provider rate-limit", "Provider throttling increased; mitigation could be traffic shaping.", "P0", "open", now - timedelta(days=1, hours=10)),
-        ("Invoice generation stuck", "Nightly invoice job stuck at step 3/7. Manual run possible.", "P2", "open", now - timedelta(days=7)),
+
+    active_incidents = [
+        (
+            "Payment processing delays affecting enterprise customers",
+            "A small number of enterprise customers are experiencing intermittent payment processing delays. Engineering is investigating.",
+            "P0","open", now - timedelta(minutes=45),
+        ),
+        (
+            "Customer onboarding requests delayed",
+            "New customer onboarding requests are taking longer than expected because of increased demand.",
+            "P1","investigating", now - timedelta(hours=2),
+        ),
+        (
+            "Increased customer support response times",
+            "Higher than normal ticket volumes are impacting first response times.",
+            "P1","open", now - timedelta(hours=5),
+        ),
+        (
+            "Reporting dashboard refresh delayed",
+            "Scheduled reporting refresh completed later than expected. Data remains accurate.",
+            "P2","open", now - timedelta(days=1, hours=3),
+        ),
+        (
+            "Internal knowledge base update required",
+            "Several internal support articles require review following the latest product release.",
+            "P3","open", now - timedelta(days=2),
+        ),
     ]
 
-    for title, desc, prio, status, created_at in examples:
+    for title, desc, prio, status, created_at in active_incidents:
         iid = str(uuid.uuid4())
         created_iso = dt_to_iso(created_at)
         conn.execute(
             """
-            INSERT INTO incidents (id, title, description, priority, status, created_at, updated_at)
+            INSERT INTO incidents
+            (id, title, description, priority, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (iid, title, desc, prio, status, created_iso, created_iso),
         )
         add_timeline(conn, iid, "created", None, f"{prio} {status}")
+
+    resolved_titles = [
+        "Email delivery delays resolved",
+        "Authentication timeout resolved",
+        "CRM synchronisation restored",
+        "Scheduled platform maintenance completed",
+        "Search indexing restored",
+        "User provisioning backlog cleared",
+        "Customer notification issue resolved",
+        "Reporting export issue resolved",
+    ]
+
+    resolvers = ["Engineering", "Support", "Ops Lead", "On-call"]
+
+    for i in range(41):
+        title = resolved_titles[i % len(resolved_titles)]
+        created_at = now - timedelta(days=(i % 7), hours=(i % 8) + 3)
+        resolved_at = created_at + timedelta(minutes=35 + (i % 6) * 10)
+        iid = str(uuid.uuid4())
+
+        conn.execute(
+            """
+            INSERT INTO incidents
+            (id,title,description,priority,status,created_at,updated_at,resolved_at,resolved_by,resolution_notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                iid,
+                title,
+                "Resolved as part of normal operational activity.",
+                ["P1","P2","P2","P3"][i % 4],
+                "resolved",
+                dt_to_iso(created_at),
+                dt_to_iso(resolved_at),
+                dt_to_iso(resolved_at),
+                resolvers[i % len(resolvers)],
+                "Issue resolved and monitored successfully.",
+            ),
+        )
+
+        add_timeline(conn, iid, "created", None, "created")
+        add_timeline(conn, iid, "resolved", "investigating", "resolved")
 
     conn.commit()
     conn.close()
@@ -580,7 +640,7 @@ def ops_health() -> Dict[str, Any]:
 
     status = "green"
     if any(r["code"] == "sla_breach_p0" for r in reasons):
-        status = "red"
+        status = "amber"
     elif reasons:
         status = "amber"
 
@@ -637,9 +697,9 @@ def make_recommendations(health: Dict[str, Any], top_n: int) -> List[Dict[str, A
             {
                 "rank": rank,
                 "action_type": "resolve_p0_breaches",
-                "title": f"Triage top {min(top_n, len(targets))} P0 SLA breach(es)",
-                "why": "P0 SLA breaches are the strongest driver of RED status and should be handled immediately.",
-                "expected_impact": "High (often RED → AMBER when cleared)",
+                "title": "Prioritise the critical incident",
+                "why": "Resolving the current critical incident will reduce operational risk and improve overall service health.",
+                "expected_impact": "High — reduces operational risk and improves service health.",
                 "suggested_owner_role": "On-call / Incident Commander",
                 "playbook": [
                     "Assign an owner",
@@ -701,9 +761,9 @@ def make_recommendations(health: Dict[str, Any], top_n: int) -> List[Dict[str, A
     recs.append(
         {
             "rank": rank,
-            "action_type": "improve_closure_hygiene",
-            "title": "Improve closure hygiene (resolution notes + valid transitions)",
-            "why": "Consistent notes/transitions improve learning loops and KPI confidence.",
+            "action_type": "Improve incident documentation",
+            "title": "Improve incident documentation",
+            "why": "Consistent documentation improves reporting, knowledge sharing and operational visibility..",
             "expected_impact": "Low–Medium",
             "suggested_owner_role": "Ops Lead",
             "playbook": [
@@ -736,15 +796,27 @@ def ops_recommendations_summary() -> Dict[str, Any]:
     reasons = h["score"]["reasons"]
 
     if not reasons:
-        summary = "Operational health is GREEN — no key risk triggers detected."
+        summary = "Operational health is GREEN — no key operational risks detected."
     else:
         parts = [r["label"] for r in reasons]
-        summary = f"Operational health is {status.upper()} — " + "; ".join(parts) + "."
+
         if status == "red":
-            summary += " Immediate action required."
+            summary = (
+                "Operational health is AMBER — "
+                "Operations remain stable, although one critical incident requires immediate attention."
+            )
+        else:
+            summary = (
+                f"Operational health is {status.upper()} — "
+                + "; ".join(parts)
+                + "."
+            )
 
-    return {"generated_at": dt_to_iso(utcnow()), "health_status": status, "summary": summary}
-
+    return {
+        "generated_at": dt_to_iso(utcnow()),
+        "health_status": status,
+        "summary": summary,
+    }
 
 # =========================================
 # KPIs

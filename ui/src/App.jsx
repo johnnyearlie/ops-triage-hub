@@ -581,7 +581,7 @@ export default function App() {
           <Card title="KPIs">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
               <div>
-                <Label>Window (days)</Label>
+                <Label>Reporting Period</Label>
                 <Select value={String(kpiDays)} onChange={(v) => setKpiDays(Number(v))} options={["7", "30", "90"]} />
               </div>
               <div>
@@ -592,7 +592,7 @@ export default function App() {
 
             <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
               <div>
-                <Label>Critical Priority Resolved</Label>
+                <Label>Critical Incidents Resolved</Label>
                 <div style={{ fontSize: 18, fontWeight: 900 }}>{kpis?.p0_resolved_count ?? "—"}</div>
               </div>
               <div>
@@ -602,7 +602,7 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <Label>Top Assigned Resolvers</Label>
+                <Label>Top Resolvers</Label>
                 <div style={{ fontSize: 12, color: THEME.subtleText, paddingTop: 8 }}>
                   {topResolvers.length ? `${topResolvers[0].role} (${topResolvers[0].resolved})` : "—"}
                 </div>
