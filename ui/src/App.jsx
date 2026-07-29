@@ -69,6 +69,37 @@ async function jfetch(url, opts) {
   }
   return data;
 }
+function formatDateTime(isoString) {
+  if (!isoString) return "—";
+
+  const date = new Date(isoString);
+  const now = new Date();
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  const diffDays = Math.round((today - target) / (1000 * 60 * 60 * 24));
+
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  if (diffDays === 0) {
+    return `Today · ${time}`;
+  }
+
+  if (diffDays === 1) {
+    return `Yesterday · ${time}`;
+  }
+
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+  }) + ` · ${time}`;
+}
+
 
 function Card({ title, right, children }) {
   return (
@@ -76,7 +107,7 @@ function Card({ title, right, children }) {
       style={{
         border: `1px solid ${THEME.cardBorder}`,
         borderRadius: 16,
-        padding: 14,
+        padding: 12,
         background: THEME.cardBg,
         boxShadow: THEME.shadow,
         backdropFilter: "blur(10px)",
@@ -86,7 +117,7 @@ function Card({ title, right, children }) {
         <div style={{ fontWeight: 800, color: THEME.heading }}>{title}</div>
         {right}
       </div>
-      <div style={{ marginTop: 10 }}>{children}</div>
+      <div style={{ marginTop: 8 }}>{children}</div>
     </div>
   );
 }
@@ -480,7 +511,7 @@ export default function App() {
   const SectionGrid = (cols) => ({
     display: "grid",
     gridTemplateColumns: cols,
-    gap: 14,
+    gap: 10,
     alignItems: "start",
   });
 
@@ -897,54 +928,113 @@ export default function App() {
         </div>
 
         <div style={SectionGrid("1fr 1fr")}>
-          <Card title={`Active incidents (${active.length})`}>
-            <div style={{ display: "grid", gap: 8 }}>
-              {active.slice(0, 50).map((i) => (
-                <div key={i.id} style={RowTile(selectedId === i.id)}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 900 }}>{i.title}</div>
-                    <Button onClick={() => selectIncident(i.id)} disabled={false} title="Select incident">
-                      Select
-                    </Button>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <Pill>{i.priority}</Pill>
-                    <Pill>{i.status}</Pill>
-                    <span style={{ fontSize: 12, color: THEME.subtleText }}>{i.created_at}</span>
-                  </div>
-                </div>
-              ))}
-              {!active.length ? (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>No active incidents.</div>
-              ) : null}
-            </div>
-          </Card>
+       <Card title={`Active incidents (${active.length})`}>
+  <div style={{ display: "grid", gap: 8 }}>
+    {active.slice(0, 50).map((i) => (
+      <div key={i.id} style={RowTile(selectedId === i.id)}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontWeight: 900 }}>{i.title}</div>
 
-          <Card title={`Resolved incidents (${resolvedFiltered.length})`} right={<Pill>Window: {kpiDays}d</Pill>}>
-            <div style={{ display: "grid", gap: 8 }}>
-              {resolvedFiltered.slice(0, 50).map((i) => (
-                <div key={i.id} style={RowTile(selectedId === i.id)}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 900 }}>{i.title}</div>
-                    <Button onClick={() => selectIncident(i.id)} disabled={false}>
-                      Select
-                    </Button>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <Pill>{i.priority}</Pill>
-                    <Pill>{i.status}</Pill>
-                    <Pill>{i.resolved_by || "Unassigned"}</Pill>
-                    <span style={{ fontSize: 12, color: THEME.subtleText }}>{i.resolved_at || i.updated_at}</span>
-                  </div>
-                </div>
-              ))}
-              {!resolvedFiltered.length ? (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  No resolved incidents for this window/filter.
-                </div>
-              ) : null}
-            </div>
-          </Card>
+          <Button
+            onClick={() => selectIncident(i.id)}
+            disabled={false}
+            title="Select incident"
+          >
+            Select
+          </Button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <Pill>{i.priority}</Pill>
+          <Pill>{i.status}</Pill>
+
+          <span style={{ fontSize: 12, color: THEME.subtleText }}>
+            {formatDateTime(i.created_at)}
+          </span>
+        </div>
+      </div>
+    ))}
+
+    {!active.length ? (
+      <div style={{ fontSize: 12, color: THEME.subtleText }}>
+        No active incidents.
+      </div>
+    ) : null}
+  </div>
+</Card>
+
+<Card title={`Resolved incidents (${resolvedFiltered.length})`} right={<Pill>Window: {kpiDays}d</Pill>}>
+  <div style={{ display: "grid", gap: 8 }}>
+    {resolvedFiltered.slice(0, 5).map((i) => (
+      <div key={i.id} style={RowTile(selectedId === i.id)}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontWeight: 900 }}>{i.title}</div>
+
+          <Button onClick={() => selectIncident(i.id)} disabled={false}>
+            Select
+          </Button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <Pill>{i.priority}</Pill>
+          <Pill>{i.status}</Pill>
+          <Pill>{i.resolved_by || "Unassigned"}</Pill>
+
+          <span style={{ fontSize: 12, color: THEME.subtleText }}>
+            {formatDateTime(i.resolved_at || i.updated_at)}
+          </span>
+        </div>
+      </div>
+    ))}
+
+    {!resolvedFiltered.length ? (
+      <div style={{ fontSize: 12, color: THEME.subtleText }}>
+        No resolved incidents for this window/filter.
+      </div>
+    ) : null}
+
+    {resolvedFiltered.length > 5 ? (
+      <div
+        style={{
+          marginTop: 10,
+          textAlign: "center",
+          fontSize: 12,
+          color: THEME.subtleText,
+        }}
+      >
+        Displaying the 5 most recent resolved incidents
+      </div>
+    ) : null}
+  </div>
+</Card>
         </div>
 
        
