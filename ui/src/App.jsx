@@ -30,24 +30,39 @@ const STATUS_TRANSITIONS = {
 };
 
 const THEME = {
-  pageBg: "#0b1020",
-  cardBg: "rgba(255,255,255,0.06)",
-  cardBorder: "rgba(255,255,255,0.10)",
-  subtleBorder: "rgba(255,255,255,0.12)",
-  subtleText: "rgba(255,255,255,0.62)",
-  text: "rgba(255,255,255,0.92)",
-  heading: "rgba(255,255,255,0.92)",
-  inputBg: "rgba(255,255,255,0.07)",
-  inputBorder: "rgba(255,255,255,0.14)",
-  inputBorderHover: "rgba(255,255,255,0.22)",
-  buttonBg: "rgba(255,255,255,0.08)",
-  buttonBgHover: "rgba(255,255,255,0.11)",
-  primaryBg: "rgba(255,255,255,0.12)",
-  primaryBgHover: "rgba(255,255,255,0.16)",
-  dangerBg: "rgba(255, 90, 90, 0.12)",
-  dangerBorder: "rgba(255, 90, 90, 0.28)",
-  dangerText: "rgba(255, 210, 210, 0.92)",
-  shadow: "0 10px 30px rgba(0,0,0,0.35)",
+  // Backgrounds
+  pageBg: "#F5F8FC",
+  cardBg: "#FFFFFF",
+
+  // Borders
+  cardBorder: "#D8E3EC",
+  subtleBorder: "#E4EBF2",
+
+  // Text
+  text: "#1F2937",
+  heading: "#0F172A",
+  subtleText: "#64748B",
+
+  // Inputs
+  inputBg: "#FFFFFF",
+  inputBorder: "#CBD5E1",
+  inputBorderHover: "#2563EB",
+
+  // Buttons
+  buttonBg: "#F8FAFC",
+  buttonBgHover: "#EEF4FF",
+
+  // Primary
+  primaryBg: "#2563EB",
+  primaryBgHover: "#1D4ED8",
+
+  // Danger
+  dangerBg: "#FEF2F2",
+  dangerBorder: "#FCA5A5",
+  dangerText: "#B91C1C",
+
+  // Shadow
+  shadow: "0 8px 24px rgba(15,23,42,0.08)",
 };
 
 async function jfetch(url, opts) {
@@ -124,11 +139,30 @@ function Card({ title, right, children }) {
 
 function Pill({ children, tone = "neutral" }) {
   const tones = {
-    red: { bg: "rgba(239,68,68,0.18)", border: "rgba(239,68,68,0.40)", text: "rgba(255,255,255,0.95)" },
-    amber: { bg: "rgba(245,158,11,0.18)", border: "rgba(245,158,11,0.40)", text: "rgba(255,255,255,0.95)" },
-    green: { bg: "rgba(34,197,94,0.18)", border: "rgba(34,197,94,0.40)", text: "rgba(255,255,255,0.95)" },
-    neutral: { bg: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.14)", text: "rgba(255,255,255,0.92)" },
-  };
+    red: {
+    bg: "#FEE2E2",
+    border: "#EF4444",
+    text: "#B91C1C",
+  },
+
+  amber: {
+    bg: "#FEF3C7",
+    border: "#F59E0B",
+    text: "#B45309",
+  },
+
+  green: {
+    bg: "#DCFCE7",
+    border: "#22C55E",
+    text: "#166534",
+  },
+
+  neutral: {
+    bg: "#F8FAFC",
+    border: "#CBD5E1",
+    text: "#475569",
+  },
+};  
 
   const t = tones[tone] || tones.neutral;
 
@@ -198,6 +232,7 @@ function Select({ value, onChange, options, disabled }) {
 
 function Button({ children, onClick, disabled, variant = "default", title }) {
   const isPrimary = variant === "primary";
+
   return (
     <button
       type="button"
@@ -207,23 +242,42 @@ function Button({ children, onClick, disabled, variant = "default", title }) {
       style={{
         padding: "10px 12px",
         borderRadius: 12,
-        border: `1px solid ${THEME.subtleBorder}`,
-        background: isPrimary ? THEME.primaryBg : THEME.buttonBg,
-        color: THEME.text,
+
+  border: disabled
+  ? "1px solid #D9E2EC"
+  : isPrimary
+    ? "2px solid #2563EB"
+    : "2px solid #2563EB",
+
+background: disabled
+  ? "#F3F6FA"
+  : isPrimary
+    ? "#2563EB"
+    : "#FFFFFF",
+
+color: disabled
+  ? "#9CA3AF"
+  : isPrimary
+    ? "#FFFFFF"
+    : "#2563EB",
+
         cursor: disabled ? "not-allowed" : "pointer",
         fontWeight: 750,
-        transition: "transform 0.06s ease, background 0.2s ease, border-color 0.2s ease",
+        transition:
+          "transform 0.06s ease, background 0.2s ease, border-color 0.2s ease",
         opacity: disabled ? 0.6 : 1,
       }}
       onMouseEnter={(e) => {
         if (disabled) return;
-        e.currentTarget.style.background = isPrimary ? THEME.primaryBgHover : THEME.buttonBgHover;
-        e.currentTarget.style.borderColor = THEME.inputBorderHover;
+        e.currentTarget.style.background = isPrimary
+          ? "#1D4ED8"
+          : THEME.buttonBgHover;
       }}
       onMouseLeave={(e) => {
         if (disabled) return;
-        e.currentTarget.style.background = isPrimary ? THEME.primaryBg : THEME.buttonBg;
-        e.currentTarget.style.borderColor = THEME.subtleBorder;
+        e.currentTarget.style.background = isPrimary
+          ? "#2563EB"
+          : THEME.buttonBg;
       }}
       onMouseDown={(e) => {
         if (!disabled) e.currentTarget.style.transform = "translateY(1px)";
@@ -236,6 +290,8 @@ function Button({ children, onClick, disabled, variant = "default", title }) {
     </button>
   );
 }
+      
+     
 
 export default function App() {
   // Data
@@ -493,13 +549,12 @@ export default function App() {
     return Array.from(new Set(["All", ...rolesFromKpi, ...rolesFromResolved]));
   }, [topResolvers, resolved]);
 
-  const Page = {
-    padding: 18,
-    minHeight: "100vh",
-    background:
-      "radial-gradient(1200px 600px at 20% 10%, rgba(55, 135, 255, 0.18), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(30, 200, 160, 0.12), transparent 55%), #0b1020",
-    color: THEME.text,
-  };
+const Page = {
+  padding: 18,
+  minHeight: "100vh",
+  background: THEME.pageBg,
+  color: THEME.text,
+};
 
   const Container = {
     maxWidth: 1120,
@@ -515,14 +570,27 @@ export default function App() {
     alignItems: "start",
   });
 
-  const RowTile = (isSelected = false) => ({
-    padding: 10,
-    borderRadius: 14,
-    border: `1px solid ${THEME.subtleBorder}`,
-    background: isSelected ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)",
-    display: "grid",
-    gap: 6,
-  });
+ const RowTile = (isSelected = false) => ({
+  padding: 12,
+  borderRadius: 14,
+
+  border: isSelected
+    ? "2px solid #2563EB"
+    : `1px solid ${THEME.subtleBorder}`,
+
+  background: isSelected
+    ? "#EFF6FF"
+    : THEME.cardBg,
+
+  boxShadow: isSelected
+    ? "0 8px 20px rgba(37, 99, 235, 0.12)"
+    : "0 1px 3px rgba(0,0,0,0.04)",
+
+  transition: "all 0.18s ease",
+
+  display: "grid",
+  gap: 8,
+});
 
   return (
     <div style={Page}>
@@ -691,6 +759,24 @@ export default function App() {
                   placeholder="e.g. Checkout failing for DE customers"
                   style={InputBaseStyle(false)}
                 />
+                <div
+  style={{
+    marginTop: 6,
+    fontSize: 12,
+    color:
+      cTitle.length === 0
+        ? THEME.subtleText
+        : cTitle.trim().length >= 3
+          ? "#16A34A"
+          : "#D97706",
+  }}
+>
+  {cTitle.length === 0
+    ? "Title must be at least 3 characters."
+    : cTitle.trim().length >= 3
+      ? "✓ Title looks good"
+      : `Title (${cTitle.trim().length} / 3)`}
+</div>
               </div>
 
               <div>
@@ -702,6 +788,24 @@ export default function App() {
                   rows={5}
                   style={{ ...InputBaseStyle(false), resize: "vertical" }}
                 />
+                <div
+  style={{
+    marginTop: 6,
+    fontSize: 12,
+    color:
+      cDesc.length === 0
+        ? THEME.subtleText
+        : cDesc.trim().length >= 10
+          ? "#16A34A"
+          : "#D97706",
+  }}
+>
+  {cDesc.length === 0
+    ? "Description must be at least 10 characters."
+    : cDesc.trim().length >= 10
+      ? "✓ Description looks good"
+      : `Description (${cDesc.trim().length} / 10)`}
+</div>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -750,7 +854,31 @@ export default function App() {
               >
                 {creating ? "Creating…" : "Create incident"}
               </Button>
+              {(cTitle.trim().length < 3 || cDesc.trim().length < 10) && (
+  <div
+    style={{
+      marginTop: 8,
+      fontSize: 12,
+      color: THEME.subtleText,
+      textAlign: "center",
+    }}
+  >
+    Complete the required fields to create an incident.
+  </div>
+)}
             </div>
+            {(cTitle.trim().length < 3 || cDesc.trim().length < 10) && (
+  <div
+    style={{
+      marginTop: 8,
+      fontSize: 12,
+      color: THEME.subtleText,
+      textAlign: "center",
+    }}
+  >
+    Complete the required fields to create an incident.
+  </div>
+)}
           </Card>
                   <Card
             title="Update incident"
@@ -761,13 +889,15 @@ export default function App() {
                   onClick={refreshSelected}
                   disabled={!selectedId || updating || timelineLoading}
                   style={{
-                    padding: "6px 10px",
-                    borderRadius: 10,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(255,255,255,0.06)",
-                    cursor: !selectedId ? "not-allowed" : "pointer",
-                    fontWeight: 650,
-                  }}
+  padding: "6px 12px",
+  borderRadius: 10,
+  border: "1px solid #2563EB",
+  background: "#FFFFFF",
+  color: "#2563EB",
+  cursor: !selectedId ? "not-allowed" : "pointer",
+  fontWeight: 700,
+  transition: "all 0.2s ease",
+}}
                 >
                   Refresh
                 </button>
@@ -847,7 +977,7 @@ export default function App() {
               <Button
                 onClick={updateIncident}
                 disabled={updating || !selectedId || invalidResolve}
-                variant="primary"
+                variant="default"
                 title="PATCH /incidents/:id"
               >
                 {updating ? "Updating…" : "Update incident"}
@@ -931,7 +1061,20 @@ export default function App() {
        <Card title={`Active incidents (${active.length})`}>
   <div style={{ display: "grid", gap: 8 }}>
     {active.slice(0, 50).map((i) => (
-      <div key={i.id} style={RowTile(selectedId === i.id)}>
+  <div
+    key={i.id}
+    style={RowTile(selectedId === i.id)}
+    onMouseEnter={(e) => {
+      if (selectedId === i.id) return;
+      e.currentTarget.style.transform = "translateY(-2px)";
+      e.currentTarget.style.boxShadow = "0 6px 18px rgba(0,0,0,0.08)";
+    }}
+    onMouseLeave={(e) => {
+      if (selectedId === i.id) return;
+      e.currentTarget.style.transform = "translateY(0)";
+      e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)";
+    }}
+  >
         <div
           style={{
             display: "flex",
@@ -943,12 +1086,13 @@ export default function App() {
           <div style={{ fontWeight: 900 }}>{i.title}</div>
 
           <Button
-            onClick={() => selectIncident(i.id)}
-            disabled={false}
-            title="Select incident"
-          >
-            Select
-          </Button>
+  onClick={() => selectIncident(i.id)}
+  disabled={false}
+  title="Select incident"
+  variant={selectedId === i.id ? "primary" : "default"}
+>
+  {selectedId === i.id ? "✓ Selected" : "Select"}
+</Button>
         </div>
 
         <div
@@ -977,10 +1121,26 @@ export default function App() {
   </div>
 </Card>
 
-<Card title={`Resolved incidents (${resolvedFiltered.length})`} right={<Pill>Window: {kpiDays}d</Pill>}>
+<Card
+  title={`Resolved incidents (${resolvedFiltered.length})`}
+  right={<Pill>{kpiDays}-Day Reporting Period</Pill>}
+>
   <div style={{ display: "grid", gap: 8 }}>
     {resolvedFiltered.slice(0, 5).map((i) => (
-      <div key={i.id} style={RowTile(selectedId === i.id)}>
+      <div
+        key={i.id}
+        style={RowTile(selectedId === i.id)}
+        onMouseEnter={(e) => {
+          if (selectedId === i.id) return;
+          e.currentTarget.style.transform = "translateY(-2px)";
+          e.currentTarget.style.boxShadow = "0 6px 18px rgba(0,0,0,0.08)";
+        }}
+        onMouseLeave={(e) => {
+          if (selectedId === i.id) return;
+          e.currentTarget.style.transform = "translateY(0)";
+          e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)";
+        }}
+      >
         <div
           style={{
             display: "flex",
@@ -991,8 +1151,12 @@ export default function App() {
         >
           <div style={{ fontWeight: 900 }}>{i.title}</div>
 
-          <Button onClick={() => selectIncident(i.id)} disabled={false}>
-            Select
+          <Button
+            onClick={() => selectIncident(i.id)}
+            disabled={false}
+            variant={selectedId === i.id ? "primary" : "default"}
+          >
+            {selectedId === i.id ? "✓ Selected" : "Select"}
           </Button>
         </div>
 
@@ -1017,7 +1181,7 @@ export default function App() {
 
     {!resolvedFiltered.length ? (
       <div style={{ fontSize: 12, color: THEME.subtleText }}>
-        No resolved incidents for this window/filter.
+        No resolved incidents for this reporting period.
       </div>
     ) : null}
 
