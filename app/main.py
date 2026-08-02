@@ -332,11 +332,14 @@ class TriageResponse(BaseModel):
     rationale: str
 
 
+class AIAssistantRequest(BaseModel):
+    incident_id: str = Field(min_length=1)
+
+
 # =========================================
 # App
 # =========================================
 app = FastAPI(title="Ops Triage Hub API", version="0.1.0")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
@@ -504,6 +507,36 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
     out = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     conn.close()
     return incident_row_to_dict(out)
+
+
+@app.delete("/incidents/{incident_id}")
+def delete_incident(incident_id: str) -> Dict[str, Any]:
+    conn = db()
+    try:
+        row = conn.execute("SELECT id, title FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        # Hard delete is acceptable for this local portfolio demo.
+        # A production implementation should normally use soft deletion
+        # so the audit record can be retained.
+        conn.execute("DELETE FROM timeline WHERE incident_id = ?", (incident_id,))
+        conn.execute("DELETE FROM incidents WHERE id = ?", (incident_id,))
+        conn.commit()
+
+        return {
+            "success": True,
+            "deleted_incident_id": incident_id,
+            "deleted_incident_title": row["title"],
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete incident") from exc
+    finally:
+        conn.close()
 
 
 @app.get("/incidents/{incident_id}/timeline")
@@ -817,6 +850,112 @@ def ops_recommendations_summary() -> Dict[str, Any]:
         "health_status": status,
         "summary": summary,
     }
+
+
+# =========================================
+# AI Operations Assistant (mock vertical slice)
+# =========================================
+@app.post("/ai/assistant")
+def ai_assistant(payload: AIAssistantRequest) -> Dict[str, Any]:
+    """
+    Mock structured response used to prove the end-to-end AI Assistant workflow.
+
+    The next sprint replaces this deterministic response with an OpenAI API call
+    while preserving the same request and response contract.
+    """
+    conn = db()
+    try:
+        incident = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (payload.incident_id,),
+        ).fetchone()
+
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        timeline_rows = conn.execute(
+            """
+            SELECT event_type, created_at, old_value, new_value
+            FROM timeline
+            WHERE incident_id = ?
+            ORDER BY created_at DESC
+            LIMIT 20
+            """,
+            (payload.incident_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    incident_data = incident_row_to_dict(incident)
+    status = incident_data["status"]
+    priority = incident_data["priority"]
+    title = incident_data["title"]
+
+    status_actions = {
+        "open": [
+            "Confirm the incident owner and begin investigation.",
+            "Validate the scope of impact and identify affected teams or customers.",
+            "Set a clear time for the next operational update.",
+        ],
+        "investigating": [
+            "Continue investigating the cause and record confirmed findings.",
+            "Confirm whether a mitigation is available and assign an owner.",
+            "Keep affected teams informed at an agreed update interval.",
+        ],
+        "mitigated": [
+            "Monitor the service to confirm the mitigation remains effective.",
+            "Document any remaining risk or follow-up work.",
+            "Resolve the incident only when service stability has been confirmed.",
+        ],
+        "resolved": [
+            "Confirm that resolution notes and ownership details are complete.",
+            "Capture any follow-up actions or recurring risks.",
+            "Share relevant learning with affected teams.",
+        ],
+    }
+
+    priority_risk = {
+        "P0": "The incident carries critical operational risk and requires immediate oversight.",
+        "P1": "The incident carries high operational risk and should remain under close review.",
+        "P2": "The incident carries moderate operational risk and should be actively managed.",
+        "P3": "The incident currently carries limited operational risk but should remain visible until closed.",
+    }
+
+    stakeholders = ["Operations Manager", "Incident owner"]
+    if priority in {"P0", "P1"}:
+        stakeholders.extend(["Engineering", "Customer Support"])
+    else:
+        stakeholders.append("Owning team")
+
+    timeline_count = len(timeline_rows)
+    timeline_note = (
+        f"{timeline_count} activity event{'s' if timeline_count != 1 else ''} "
+        "are currently available for review."
+    )
+
+    return {
+        "success": True,
+        "source": "mock",
+        "generated_at": dt_to_iso(utcnow()),
+        "summary": {
+            "executive_summary": (
+                f"{title} is currently {status} and recorded as {priority}. "
+                f"{timeline_note} Human review is required before any operational decision is taken."
+            ),
+            "business_impact": (
+                "The available incident record does not quantify financial or customer impact. "
+                "The Operations Manager should confirm the affected services, customers and teams "
+                "before communicating a final impact assessment."
+            ),
+            "recommended_actions": status_actions.get(status, status_actions["open"]),
+            "stakeholders": stakeholders,
+            "risks": [
+                priority_risk.get(priority, "Operational risk should be reviewed."),
+                "Incomplete impact information may lead to delayed or inconsistent communication.",
+            ],
+        },
+    }
+
 
 # =========================================
 # KPIs
