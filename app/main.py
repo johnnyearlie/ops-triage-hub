@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from app.ai import generate_ai_summary
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -857,168 +858,45 @@ def ops_recommendations_summary() -> Dict[str, Any]:
 # =========================================
 @app.post("/ai/assistant")
 def ai_assistant(payload: AIAssistantRequest) -> Dict[str, Any]:
-    """
-    Mock structured response used to prove the end-to-end AI Assistant workflow.
 
-    The next sprint replaces this deterministic response with an OpenAI API call
-    while preserving the same request and response contract.
-    """
     conn = db()
-    try:
-        incident = conn.execute(
-            "SELECT * FROM incidents WHERE id = ?",
-            (payload.incident_id,),
-        ).fetchone()
 
-        if not incident:
-            raise HTTPException(status_code=404, detail="Incident not found")
+    incident = conn.execute(
+        "SELECT * FROM incidents WHERE id = ?",
+        (payload.incident_id,),
+    ).fetchone()
 
-        timeline_rows = conn.execute(
-            """
-            SELECT event_type, created_at, old_value, new_value
-            FROM timeline
-            WHERE incident_id = ?
-            ORDER BY created_at DESC
-            LIMIT 20
-            """,
-            (payload.incident_id,),
-        ).fetchall()
-    finally:
+    if not incident:
         conn.close()
+        raise HTTPException(
+            status_code=404,
+            detail="Incident not found",
+        )
 
-    incident_data = incident_row_to_dict(incident)
-    status = incident_data["status"]
-    priority = incident_data["priority"]
-    title = incident_data["title"]
+    timeline_rows = conn.execute(
+        """
+        SELECT *
+        FROM timeline
+        WHERE incident_id = ?
+        ORDER BY created_at ASC
+        """,
+        (payload.incident_id,),
+    ).fetchall()
 
-    status_actions = {
-        "open": [
-            "Confirm the incident owner and begin investigation.",
-            "Validate the scope of impact and identify affected teams or customers.",
-            "Set a clear time for the next operational update.",
-        ],
-        "investigating": [
-            "Continue investigating the cause and record confirmed findings.",
-            "Confirm whether a mitigation is available and assign an owner.",
-            "Keep affected teams informed at an agreed update interval.",
-        ],
-        "mitigated": [
-            "Monitor the service to confirm the mitigation remains effective.",
-            "Document any remaining risk or follow-up work.",
-            "Resolve the incident only when service stability has been confirmed.",
-        ],
-        "resolved": [
-            "Confirm that resolution notes and ownership details are complete.",
-            "Capture any follow-up actions or recurring risks.",
-            "Share relevant learning with affected teams.",
-        ],
-    }
+    conn.close()
 
-    priority_risk = {
-        "P0": "The incident carries critical operational risk and requires immediate oversight.",
-        "P1": "The incident carries high operational risk and should remain under close review.",
-        "P2": "The incident carries moderate operational risk and should be actively managed.",
-        "P3": "The incident currently carries limited operational risk but should remain visible until closed.",
-    }
-
-    stakeholders = ["Operations Manager", "Incident owner"]
-    if priority in {"P0", "P1"}:
-        stakeholders.extend(["Engineering", "Customer Support"])
-    else:
-        stakeholders.append("Owning team")
-
-    timeline_count = len(timeline_rows)
-    timeline_note = (
-        f"{timeline_count} activity event{'s' if timeline_count != 1 else ''} "
-        "are currently available for review."
+    summary = generate_ai_summary(
+        incident_row_to_dict(incident),
+        [dict(row) for row in timeline_rows],
     )
 
     return {
         "success": True,
-        "source": "mock",
+        "source": "OpenAI",
+        "model": "gpt-5.5",
         "generated_at": dt_to_iso(utcnow()),
-        "summary": {
-            "executive_summary": (
-                f"{title} is currently {status} and recorded as {priority}. "
-                f"{timeline_note} Human review is required before any operational decision is taken."
-            ),
-            "business_impact": (
-                "The available incident record does not quantify financial or customer impact. "
-                "The Operations Manager should confirm the affected services, customers and teams "
-                "before communicating a final impact assessment."
-            ),
-            "recommended_actions": status_actions.get(status, status_actions["open"]),
-            "stakeholders": stakeholders,
-            "risks": [
-                priority_risk.get(priority, "Operational risk should be reviewed."),
-                "Incomplete impact information may lead to delayed or inconsistent communication.",
-            ],
-        },
+        "summary": summary,
     }
-
-
-# =========================================
-# KPIs
-# =========================================
-@app.get("/ops/kpis")
-def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
-    """
-    KPIs derived from incidents table.
-
-    Uses:
-      - incidents.created_at
-      - incidents.status
-      - incidents.resolved_at
-      - incidents.resolved_by
-    """
-    cutoff = utcnow() - timedelta(days=days)
-
-    conn = db()
-    rows = conn.execute(
-        """
-        SELECT id, priority, created_at, resolved_at, resolved_by
-        FROM incidents
-        WHERE status = 'resolved'
-          AND COALESCE(NULLIF(resolved_at,''), NULLIF(updated_at,''), created_at) >= ?
-        """,
-        (dt_to_iso(cutoff),),
-    ).fetchall()
-    conn.close()
-
-    resolved_count = len(rows)
-    p0_resolved_count = 0
-    mttrs: List[int] = []
-    by_role: Dict[str, int] = {}
-
-    for r in rows:
-        if r["priority"] == "P0":
-            p0_resolved_count += 1
-
-        cdt = iso_to_dt(r["created_at"])
-        rdt = iso_to_dt(r["resolved_at"]) if r["resolved_at"] else None
-        if cdt and rdt and rdt >= cdt:
-            mttrs.append(minutes_between(cdt, rdt))
-
-        role = (r["resolved_by"] or "").strip() or "Unassigned"
-        by_role[role] = by_role.get(role, 0) + 1
-
-    avg_mttr = int(sum(mttrs) / len(mttrs)) if mttrs else None
-
-    top_resolvers = sorted(
-        [{"role": k, "resolved": v} for k, v in by_role.items()],
-        key=lambda x: x["resolved"],
-        reverse=True,
-    )[:5]
-
-    return {
-        "generated_at": dt_to_iso(utcnow()),
-        "window_days": days,
-        "resolved_count": resolved_count,
-        "p0_resolved_count": p0_resolved_count,
-        "avg_mttr_minutes": avg_mttr,
-        "top_resolvers": top_resolvers,
-    }
-
 
 # =========================================
 # AI Triage (demo rules)
