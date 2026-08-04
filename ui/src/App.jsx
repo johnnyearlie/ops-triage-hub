@@ -11,6 +11,7 @@ const API = {
   timeline: (id) => `/api/incidents/${id}/timeline`,
   patchIncident: (id) => `/api/incidents/${id}`,
   deleteIncident: (id) => `/api/incidents/${id}`,
+  allocateIncident: (id) => `/api/incidents/${id}/allocate`,
   assistant: "/api/ai/assistant",
 };
 
@@ -93,6 +94,16 @@ function formatDateTime(isoString) {
     day: "numeric",
     month: "short",
   })} · ${time}`;
+}
+
+function parseTimelineAllocation(event) {
+  if (event?.event_type !== "owner_assigned" || !event?.new_value) return null;
+
+  try {
+    return JSON.parse(event.new_value);
+  } catch {
+    return null;
+  }
 }
 
 function Card({ title, right, children }) {
@@ -332,6 +343,13 @@ export default function App() {
   const [aiResult, setAiResult] = useState(null);
   const [aiError, setAiError] = useState("");
 
+  const [allocationTeam, setAllocationTeam] = useState("Ops Lead");
+  const [allocationName, setAllocationName] = useState("");
+  const [chooseDifferentOwner, setChooseDifferentOwner] = useState(false);
+  const [allocating, setAllocating] = useState(false);
+  const [allocationError, setAllocationError] = useState("");
+  const [allocationSuccess, setAllocationSuccess] = useState("");
+
   const [kpiDays, setKpiDays] = useState(90);
   const [resolverFilter, setResolverFilter] = useState("All");
 
@@ -494,6 +512,9 @@ export default function App() {
     setDeleteSuccess(false);
     setAiResult(null);
     setAiError("");
+    setChooseDifferentOwner(false);
+    setAllocationError("");
+    setAllocationSuccess("");
 
     const incident = active.find((item) => item.id === id) || resolved.find((item) => item.id === id);
     if (incident) {
@@ -600,10 +621,65 @@ export default function App() {
       });
 
       setAiResult(result);
+      const recommendedOwner = result?.summary?.recommended_incident_owner?.owner;
+      if (recommendedOwner && ROLES.includes(recommendedOwner)) {
+        setAllocationTeam(recommendedOwner);
+      }
+      setChooseDifferentOwner(false);
+      setAllocationError("");
+      setAllocationSuccess("");
     } catch (error) {
       setAiError(error.message || "AI Assistant request failed");
     } finally {
       setAiLoading(false);
+    }
+  }
+
+  async function allocateIncident(useRecommendation) {
+    if (!selectedId || !selectedIncident || !aiResult?.summary) return;
+
+    const recommendedOwner = aiResult.summary.recommended_incident_owner?.owner;
+    const ownerTeam = useRecommendation ? recommendedOwner : allocationTeam;
+
+    if (!ownerTeam || !ROLES.includes(ownerTeam)) {
+      setAllocationError("Choose a valid incident owner.");
+      return;
+    }
+
+    setAllocating(true);
+    setAllocationError("");
+    setAllocationSuccess("");
+
+    try {
+      const reason = useRecommendation
+        ? aiResult.summary.recommended_incident_owner?.reason ||
+          "AI owner recommendation accepted after Operations Manager review."
+        : "Operations Manager selected a different owner after reviewing the AI operational assessment.";
+
+      await jfetch(API.allocateIncident(selectedId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          owner_team: ownerTeam,
+          owner_name: useRecommendation ? null : allocationName.trim() || null,
+          allocated_by: "Operations Manager",
+          reason,
+          recommendation_accepted: useRecommendation,
+        }),
+      });
+
+      await loadAll();
+      await loadTimeline(selectedId);
+      setTimelineCollapsed(false);
+      setChooseDifferentOwner(false);
+      const recordedOwnerName = useRecommendation ? "" : allocationName.trim();
+      setAllocationSuccess(
+        `${ownerTeam}${recordedOwnerName ? ` — ${recordedOwnerName}` : ""} is now the recorded incident owner.`
+      );
+    } catch (error) {
+      setAllocationError(error.message || "Incident allocation failed");
+    } finally {
+      setAllocating(false);
     }
   }
 
@@ -964,6 +1040,9 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                     <Pill>{selectedIncident.priority}</Pill>
                     <Pill>{selectedIncident.status}</Pill>
+                    {selectedIncident.owner_team ? (
+                      <Pill tone="green">Owner: {selectedIncident.owner_team}</Pill>
+                    ) : null}
                   </div>
                 </div>
               ) : (
@@ -1156,7 +1235,10 @@ export default function App() {
                         paddingRight: 4,
                       }}
                     >
-                      {(timeline || []).slice(0, 50).map((event) => (
+                      {(timeline || []).slice(0, 50).map((event) => {
+                        const allocation = parseTimelineAllocation(event);
+
+                        return (
                         <div
                           key={event.id}
                           style={{
@@ -1173,7 +1255,29 @@ export default function App() {
                             </div>
                           </div>
 
-                          {event.old_value || event.new_value ? (
+                          {allocation ? (
+                            <div
+                              style={{
+                                marginTop: 7,
+                                display: "grid",
+                                gap: 4,
+                                fontSize: 12,
+                                color: THEME.text,
+                              }}
+                            >
+                              <div>
+                                Owner: <b>{allocation.owner_team}</b>
+                                {allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
+                              </div>
+                              <div>
+                                Allocated by: <b>{allocation.allocated_by}</b>
+                              </div>
+                              <div>{allocation.decision}</div>
+                              <div style={{ color: THEME.subtleText }}>{allocation.reason}</div>
+                            </div>
+                          ) : null}
+
+                          {!allocation && (event.old_value || event.new_value) ? (
                             <div style={{ marginTop: 4, fontSize: 12, color: THEME.subtleText }}>
                               {event.old_value ? (
                                 <span>
@@ -1194,7 +1298,8 @@ export default function App() {
                             </div>
                           ) : null}
                         </div>
-                      ))}
+                        );
+                      })}
 
                       {!timeline.length ? (
                         <div style={{ fontSize: 12, color: THEME.subtleText }}>No activity has been recorded yet.</div>
@@ -1213,8 +1318,9 @@ export default function App() {
           >
             <div style={{ display: "grid", gap: 12 }}>
               <div style={{ fontSize: 13, color: THEME.subtleText, lineHeight: 1.55 }}>
-                Use the AI Assistant to summarise the selected incident, explain its likely business
-                impact and prepare clear operational next steps.
+                Generate an AI Operational Assessment from the selected incident, Activity History and
+                rule-based operational evidence. The assistant distinguishes facts, inferences,
+                missing information and recommended actions for human review.
               </div>
 
               {!selectedIncident ? (
@@ -1233,17 +1339,27 @@ export default function App() {
               ) : (
                 <div
                   style={{
-                    padding: 12,
-                    borderRadius: 12,
+                    padding: 14,
+                    borderRadius: 14,
                     background: "#EFF6FF",
                     border: "1px solid #BFDBFE",
                   }}
                 >
-                  <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 800 }}>
-                    INCIDENT CONTEXT
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#2563EB",
+                      fontWeight: 800,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Incident selected for analysis
                   </div>
-                  <div style={{ marginTop: 4, fontWeight: 900 }}>{selectedIncident.title}</div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <div style={{ marginTop: 5, fontSize: 16, fontWeight: 900, color: THEME.heading }}>
+                    {selectedIncident.title}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 9, flexWrap: "wrap" }}>
                     <Pill>{selectedIncident.priority}</Pill>
                     <Pill>{selectedIncident.status}</Pill>
                   </div>
@@ -1255,7 +1371,7 @@ export default function App() {
                 disabled={!selectedIncident || aiLoading}
                 variant="primary"
               >
-                {aiLoading ? "AI Assistant is reviewing…" : "Ask AI Assistant"}
+                {aiLoading ? "AI Assistant is reviewing…" : "Generate AI Operational Assessment"}
               </Button>
 
               {aiError ? (
@@ -1269,37 +1385,179 @@ export default function App() {
                     fontSize: 13,
                   }}
                 >
-                  {aiError}
+                  <div style={{ fontWeight: 900 }}>AI Assistant unavailable</div>
+                  <div style={{ marginTop: 4 }}>{aiError}</div>
                 </div>
               ) : null}
 
               {aiResult?.summary ? (
-                <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "grid", gap: 12 }}>
                   <div
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: `1px solid ${THEME.subtleBorder}`,
-                      background: "#F8FAFC",
+                      padding: 16,
+                      borderRadius: 14,
+                      border: `1px solid ${THEME.cardBorder}`,
+                      background: "#FFFFFF",
                     }}
                   >
-                    <div style={{ fontWeight: 900 }}>Executive Summary</div>
-                    <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.55 }}>
-                      {aiResult.summary.executive_summary}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "flex-start",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#2563EB",
+                            fontWeight: 800,
+                            textTransform: "uppercase",
+                            letterSpacing: 0.5,
+                          }}
+                        >
+                          Executive Operations Report
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
+                          {selectedIncident?.title || "Selected incident"}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <Pill>{selectedIncident?.priority || "—"}</Pill>
+                        <Pill>{selectedIncident?.status || "—"}</Pill>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: 14,
+                        paddingTop: 12,
+                        borderTop: `1px solid ${THEME.subtleBorder}`,
+                        display: "grid",
+                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <Label>Generated</Label>
+                        <div style={{ fontSize: 13, fontWeight: 800 }}>
+                          {formatDateTime(aiResult.generated_at)}
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Model</Label>
+                        <div style={{ fontSize: 13, fontWeight: 800 }}>
+                          {aiResult.model || "GPT-5.5"}
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Source</Label>
+                        <div style={{ fontSize: 13, fontWeight: 800 }}>
+                          {aiResult.source || "OpenAI"}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   <div
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
+                      padding: 14,
+                      borderRadius: 14,
                       border: `1px solid ${THEME.subtleBorder}`,
-                      background: "#F8FAFC",
+                      background: "#FFFFFF",
                     }}
                   >
-                    <div style={{ fontWeight: 900 }}>Business Impact</div>
-                    <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.55 }}>
-                      {aiResult.summary.business_impact}
+                    <div style={{ fontWeight: 900, color: THEME.heading }}>Executive Summary</div>
+                    <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.65 }}>
+                      {aiResult.summary.executive_summary || "No executive summary was returned."}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: `1px solid ${THEME.subtleBorder}`,
+                      background: "#FFFFFF",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: THEME.heading }}>Business Impact</div>
+                    <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.65 }}>
+                      {aiResult.summary.business_impact || "No business impact assessment was returned."}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: "1px solid #BFDBFE",
+                      background: "#EFF6FF",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: "#1E3A8A" }}>Recommended Actions</div>
+                    <div style={{ marginTop: 9, display: "grid", gap: 8 }}>
+                      {(aiResult.summary.recommended_actions || []).map((action, index) => (
+                        <div
+                          key={index}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "22px 1fr",
+                            gap: 8,
+                            alignItems: "start",
+                            fontSize: 13,
+                            lineHeight: 1.55,
+                            color: "#1E3A8A",
+                          }}
+                        >
+                          <div style={{ fontWeight: 900 }}>✓</div>
+                          <div>{action}</div>
+                        </div>
+                      ))}
+                      {!aiResult.summary.recommended_actions?.length ? (
+                        <div style={{ fontSize: 13, color: THEME.subtleText }}>
+                          No recommended actions were returned.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: "1px solid #FCD34D",
+                      background: "#FFFBEB",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: "#92400E" }}>Operational Risks</div>
+                    <div style={{ marginTop: 9, display: "grid", gap: 8 }}>
+                      {(aiResult.summary.operational_risks || aiResult.summary.risks || []).map((risk, index) => (
+                        <div
+                          key={index}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "22px 1fr",
+                            gap: 8,
+                            alignItems: "start",
+                            fontSize: 13,
+                            lineHeight: 1.55,
+                            color: "#78350F",
+                          }}
+                        >
+                          <div style={{ fontWeight: 900 }}>!</div>
+                          <div>{risk}</div>
+                        </div>
+                      ))}
+                      {!(aiResult.summary.operational_risks || aiResult.summary.risks || []).length ? (
+                        <div style={{ fontSize: 13, color: "#92400E" }}>
+                          No operational risks were returned.
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1312,59 +1570,349 @@ export default function App() {
                   >
                     <div
                       style={{
-                        padding: 12,
-                        borderRadius: 12,
+                        padding: 14,
+                        borderRadius: 14,
                         border: `1px solid ${THEME.subtleBorder}`,
                         background: "#F8FAFC",
                       }}
                     >
-                      <div style={{ fontWeight: 900 }}>Recommended Actions</div>
-                      <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.55 }}>
-                        {(aiResult.summary.recommended_actions || []).map((action, index) => (
-                          <li key={index}>{action}</li>
+                      <div style={{ fontWeight: 900, color: THEME.heading }}>Missing Information</div>
+                      <div style={{ marginTop: 9, display: "grid", gap: 8 }}>
+                        {(aiResult.summary.missing_information || []).map((item, index) => (
+                          <div
+                            key={index}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "22px 1fr",
+                              gap: 8,
+                              alignItems: "start",
+                              fontSize: 13,
+                              lineHeight: 1.55,
+                            }}
+                          >
+                            <div style={{ fontWeight: 900, color: "#475569" }}>?</div>
+                            <div>{item}</div>
+                          </div>
                         ))}
-                      </ul>
+                        {!aiResult.summary.missing_information?.length ? (
+                          <div style={{ fontSize: 13, color: THEME.subtleText }}>
+                            No missing information was identified.
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div
                       style={{
-                        padding: 12,
-                        borderRadius: 12,
+                        padding: 14,
+                        borderRadius: 14,
                         border: `1px solid ${THEME.subtleBorder}`,
                         background: "#F8FAFC",
                       }}
                     >
-                      <div style={{ fontWeight: 900 }}>Stakeholders to Inform</div>
-                      <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.55 }}>
-                        {(aiResult.summary.stakeholders || []).map((stakeholder, index) => (
-                          <li key={index}>{stakeholder}</li>
+                      <div style={{ fontWeight: 900, color: THEME.heading }}>Assumptions</div>
+                      <div style={{ marginTop: 9, display: "grid", gap: 8 }}>
+                        {(aiResult.summary.assumptions || []).map((item, index) => (
+                          <div
+                            key={index}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "14px 1fr",
+                              gap: 8,
+                              alignItems: "start",
+                              fontSize: 13,
+                              lineHeight: 1.55,
+                            }}
+                          >
+                            <div style={{ fontWeight: 900, color: "#64748B" }}>•</div>
+                            <div>{item}</div>
+                          </div>
                         ))}
-                      </ul>
+                        {!aiResult.summary.assumptions?.length ? (
+                          <div style={{ fontSize: 13, color: THEME.subtleText }}>
+                            No assumptions were identified.
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
 
                   <div
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: "1px solid #FCD34D",
-                      background: "#FFFBEB",
+                      padding: 14,
+                      borderRadius: 14,
+                      border: "1px solid #BBF7D0",
+                      background: "#F0FDF4",
                     }}
                   >
-                    <div style={{ fontWeight: 900, color: "#92400E" }}>Operational Risks</div>
-                    <ul
+                    <div style={{ fontWeight: 900, color: "#166534" }}>Long-Term Considerations</div>
+                    <div style={{ marginTop: 9, display: "grid", gap: 8 }}>
+                      {(aiResult.summary.long_term_considerations || []).map((item, index) => (
+                        <div
+                          key={index}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "14px 1fr",
+                            gap: 8,
+                            alignItems: "start",
+                            fontSize: 13,
+                            lineHeight: 1.55,
+                            color: "#166534",
+                          }}
+                        >
+                          <div style={{ fontWeight: 900 }}>•</div>
+                          <div>{item}</div>
+                        </div>
+                      ))}
+                      {!aiResult.summary.long_term_considerations?.length ? (
+                        <div style={{ fontSize: 13, color: "#166534" }}>
+                          No long-term considerations were returned.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: `1px solid ${THEME.subtleBorder}`,
+                      background: "#FFFFFF",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: THEME.heading }}>Stakeholders</div>
+                    <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {(aiResult.summary.stakeholders || []).map((stakeholder, index) => (
+                        <Pill key={index}>{stakeholder}</Pill>
+                      ))}
+                      {!aiResult.summary.stakeholders?.length ? (
+                        <div style={{ fontSize: 13, color: THEME.subtleText }}>
+                          No stakeholders were returned.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: "1px solid #BFDBFE",
+                      background: "#EFF6FF",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: "#1E3A8A" }}>
+                      AI Recommended Incident Owner
+                    </div>
+
+                    <div
                       style={{
-                        margin: "8px 0 0",
-                        paddingLeft: 18,
-                        fontSize: 13,
-                        lineHeight: 1.55,
-                        color: "#78350F",
+                        marginTop: 10,
+                        display: "grid",
+                        gridTemplateColumns: "1fr auto",
+                        gap: 12,
+                        alignItems: "start",
                       }}
                     >
-                      {(aiResult.summary.risks || []).map((risk, index) => (
-                        <li key={index}>{risk}</li>
-                      ))}
-                    </ul>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: THEME.heading }}>
+                          {aiResult.summary.recommended_incident_owner?.owner || "No recommendation"}
+                        </div>
+                        <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6 }}>
+                          {aiResult.summary.recommended_incident_owner?.reason ||
+                            "No owner recommendation rationale was returned."}
+                        </div>
+                      </div>
+
+                      <Pill
+                        tone={
+                          String(
+                            aiResult.summary.recommended_incident_owner?.recommendation_reliability || ""
+                          ).toLowerCase() === "strong"
+                            ? "green"
+                            : String(
+                                  aiResult.summary.recommended_incident_owner?.recommendation_reliability || ""
+                                ).toLowerCase() === "moderate"
+                              ? "amber"
+                              : "red"
+                        }
+                      >
+                        {aiResult.summary.recommended_incident_owner?.recommendation_reliability ||
+                          "Limited"}{" "}
+                        reliability
+                      </Pill>
+                    </div>
+
+                    {selectedIncident?.owner_team ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: 12,
+                          borderRadius: 12,
+                          background: "#ECFDF5",
+                          border: "1px solid #A7F3D0",
+                          color: "#065F46",
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase" }}>
+                          Current recorded owner
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 16, fontWeight: 900 }}>
+                          {selectedIncident.owner_team}
+                          {selectedIncident.owner_name ? ` — ${selectedIncident.owner_name}` : ""}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 12 }}>
+                          Assigned {formatDateTime(selectedIncident.owner_assigned_at)} by{" "}
+                          {selectedIncident.owner_assigned_by || "Operations Manager"}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 12, display: "grid", gap: 9 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+                          <Button
+                            onClick={() => allocateIncident(true)}
+                            disabled={
+                              allocating ||
+                              !aiResult.summary.recommended_incident_owner?.owner
+                            }
+                            variant="primary"
+                          >
+                            {allocating
+                              ? "Allocating…"
+                              : `Allocate to ${
+                                  aiResult.summary.recommended_incident_owner?.owner || "Recommended Owner"
+                                }`}
+                          </Button>
+
+                          <Button
+                            onClick={() => {
+                              setChooseDifferentOwner((current) => !current);
+                              setAllocationError("");
+                            }}
+                            disabled={allocating}
+                          >
+                            Choose Different Owner
+                          </Button>
+                        </div>
+
+                        {chooseDifferentOwner ? (
+                          <div
+                            style={{
+                              padding: 12,
+                              borderRadius: 12,
+                              background: "#FFFFFF",
+                              border: `1px solid ${THEME.subtleBorder}`,
+                              display: "grid",
+                              gap: 9,
+                            }}
+                          >
+                            <div>
+                              <Label>Owner Team</Label>
+                              <Select
+                                value={allocationTeam}
+                                onChange={setAllocationTeam}
+                                options={ROLES}
+                              />
+                            </div>
+
+                            <div>
+                              <Label>Owner Name (optional)</Label>
+                              <input
+                                value={allocationName}
+                                onChange={(event) => setAllocationName(event.target.value)}
+                                placeholder="e.g. Sarah Jones"
+                                style={InputBaseStyle(false)}
+                              />
+                            </div>
+
+                            <Button
+                              onClick={() => allocateIncident(false)}
+                              disabled={allocating}
+                              variant="primary"
+                            >
+                              {allocating ? "Allocating…" : `Allocate to ${allocationTeam}`}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {allocationError ? (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 10,
+                          borderRadius: 10,
+                          background: THEME.dangerBg,
+                          border: `1px solid ${THEME.dangerBorder}`,
+                          color: THEME.dangerText,
+                          fontSize: 13,
+                        }}
+                      >
+                        {allocationError}
+                      </div>
+                    ) : null}
+
+                    {allocationSuccess ? (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 10,
+                          borderRadius: 10,
+                          background: "#ECFDF5",
+                          border: "1px solid #A7F3D0",
+                          color: "#065F46",
+                          fontSize: 13,
+                          fontWeight: 700,
+                        }}
+                      >
+                        ✓ {allocationSuccess}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 14,
+                      borderRadius: 14,
+                      border: `1px solid ${THEME.subtleBorder}`,
+                      background: "#FFFFFF",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "160px 1fr",
+                        gap: 14,
+                        alignItems: "start",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 900, color: THEME.heading }}>Assessment Reliability</div>
+                        <div style={{ marginTop: 9 }}>
+                          <Pill
+                            tone={
+                              String(aiResult.summary.assessment_reliability || "").toLowerCase() === "strong"
+                                ? "green"
+                                : String(aiResult.summary.assessment_reliability || "").toLowerCase() === "moderate"
+                                  ? "amber"
+                                  : "red"
+                            }
+                          >
+                            {aiResult.summary.assessment_reliability || "Not stated"}
+                          </Pill>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{ fontWeight: 900, color: THEME.heading }}>Assessment Rationale</div>
+                        <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.65 }}>
+                          {aiResult.summary.assessment_rationale ||
+                            aiResult.summary.confidence_reason ||
+                            "No assessment rationale was returned."}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -1380,9 +1928,9 @@ export default function App() {
                 }}
               >
                 <div style={{ fontWeight: 900 }}>
-                  {aiResult?.source === "openai"
-                    ? "Generated using OpenAI"
-                    : "OpenAI integration preview"}
+                  {aiResult?.source
+                    ? `Generated using ${aiResult.source}${aiResult.model ? ` ${aiResult.model}` : ""}`
+                    : "AI Operations Assistant"}
                 </div>
                 <div style={{ marginTop: 6, fontSize: 13, fontWeight: 700 }}>
                   AI-generated summaries are intended to support operational decision-making.
@@ -1427,6 +1975,7 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <Pill>{incident.priority}</Pill>
                     <Pill>{incident.status}</Pill>
+                    {incident.owner_team ? <Pill tone="green">Owner: {incident.owner_team}</Pill> : null}
                     <span style={{ fontSize: 12, color: THEME.subtleText }}>
                       {formatDateTime(incident.created_at)}
                     </span>
