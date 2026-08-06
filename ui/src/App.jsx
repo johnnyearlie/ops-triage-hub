@@ -354,6 +354,9 @@ export default function App() {
 
   const [kpiDays, setKpiDays] = useState(90);
   const [resolverFilter, setResolverFilter] = useState("All");
+  const [incidentFilter, setIncidentFilter] = useState("All");
+  const [incidentSort, setIncidentSort] = useState("Operational Attention");
+  const [expandedIncidentId, setExpandedIncidentId] = useState("");
 
   const TIMELINE_MAX_HEIGHT = 260;
 
@@ -702,6 +705,138 @@ export default function App() {
     return Array.from(new Set(["All", ...fromKpis, ...fromResolved]));
   }, [topResolvers, resolved]);
 
+  function parseReportedContext(description = "") {
+    const lines = String(description || "").split("\n");
+    const metadata = {};
+    const bodyLines = [];
+    let readingMetadata = true;
+
+    for (const line of lines) {
+      if (readingMetadata && line.trim() === "") {
+        readingMetadata = false;
+        continue;
+      }
+
+      if (readingMetadata) {
+        const separatorIndex = line.indexOf(":");
+        if (separatorIndex > 0) {
+          const key = line.slice(0, separatorIndex).trim().toLowerCase();
+          const value = line.slice(separatorIndex + 1).trim();
+          metadata[key] = value;
+          continue;
+        }
+      }
+
+      bodyLines.push(line);
+    }
+
+    return {
+      reporter: metadata["reported by"] || "Not recorded",
+      role: metadata.role || "Not recorded",
+      department: metadata.department || "Not recorded",
+      businessArea: metadata["business area"] || "Not recorded",
+      attentionRequested: metadata["immediate attention requested"] || "Standard",
+      description: bodyLines.join("\n").trim() || String(description || "").trim(),
+    };
+  }
+
+  function operationalSignalsFor(incident) {
+    const context = parseReportedContext(incident?.description);
+    const source = `${incident?.title || ""} ${context.description || ""} ${context.businessArea || ""}`.toLowerCase();
+    const signals = [];
+
+    if (/(customer|shopper|client|store|retail|checkout|portal)/.test(source)) {
+      signals.push("Customer-facing service disruption detected");
+    }
+    if (/(payment|card reader|terminal|checkout|transaction|revenue|sales)/.test(source)) {
+      signals.push("Potential revenue impact identified");
+    }
+    if (/(payment|visa|mastercard|card reader|terminal|processor|acquirer)/.test(source)) {
+      signals.push("Payment services referenced");
+    }
+    if (/(multiple|across|stores|locations|market|regional|country|countries|multi-site)/.test(source)) {
+      signals.push("Multi-site operational issue");
+    }
+    if (/(authentication|login|identity|sso|access)/.test(source)) {
+      signals.push("Authentication or access issue detected");
+    }
+    if (/(down|offline|unavailable|outage|failed|failure|critical)/.test(source)) {
+      signals.push("Possible business-critical service disruption");
+    }
+
+    if (!signals.length) {
+      signals.push("Operational review required");
+    }
+
+    return signals.slice(0, 5);
+  }
+
+  function operationalAttentionFor(incident) {
+    const context = parseReportedContext(incident?.description);
+    const source = `${incident?.title || ""} ${context.description || ""} ${context.businessArea || ""}`.toLowerCase();
+    const criticalRequested = String(context.attentionRequested || "").toLowerCase() === "critical";
+
+    if (
+      criticalRequested ||
+      (/(payment|checkout|card reader|terminal|authentication|production)/.test(source) &&
+        /(down|offline|unavailable|outage|failed|failure|multiple|stores|customers)/.test(source))
+    ) {
+      return {
+        key: "Immediate Review",
+        label: "Immediate Review",
+        tone: "red",
+        rank: 3,
+        dot: "●",
+      };
+    }
+
+    if (
+      /(customer|revenue|sales|crm|portal|website|delay|backlog|degraded|error|failure|support)/.test(source) ||
+      incident?.status === "investigating"
+    ) {
+      return {
+        key: "Review Soon",
+        label: "Review Soon",
+        tone: "amber",
+        rank: 2,
+        dot: "●",
+      };
+    }
+
+    return {
+      key: "Standard Review",
+      label: "Standard Review",
+      tone: "green",
+      rank: 1,
+      dot: "●",
+    };
+  }
+
+  const dashboardIncidents = useMemo(() => {
+    const filtered = active.filter((incident) => {
+      const attention = operationalAttentionFor(incident);
+
+      if (incidentFilter === "All") return true;
+      if (incidentFilter === "Investigating") return incident.status === "investigating";
+      return attention.key === incidentFilter;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (incidentSort === "Newest") {
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      }
+      if (incidentSort === "Oldest") {
+        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+      }
+
+      const attentionDifference =
+        operationalAttentionFor(b).rank - operationalAttentionFor(a).rank;
+
+      if (attentionDifference !== 0) return attentionDifference;
+      return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+    });
+  }, [active, incidentFilter, incidentSort]);
+
   const Page = {
     padding: 18,
     minHeight: "100vh",
@@ -748,6 +883,551 @@ export default function App() {
     );
   }
 
+  if (currentView === "dashboard") {
+    return (
+      <div style={Page}>
+        <div style={Container}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 16,
+              alignItems: "center",
+              paddingBottom: 12,
+              borderBottom: `1px solid ${THEME.subtleBorder}`,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: -0.3 }}>
+                Ops Triage Hub
+              </div>
+              <div
+                style={{
+                  marginTop: 3,
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: "#2563EB",
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Operational Decision Support
+              </div>
+              <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4 }}>
+                Helping Operations teams make better decisions when it matters most.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <Button onClick={() => setCurrentView("report")}>Report Issue</Button>
+              <Button onClick={loadAll} disabled={loading} variant="primary">
+                {loading ? "Refreshing…" : "Refresh"}
+              </Button>
+            </div>
+          </div>
+
+          {err ? (
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 14,
+                background: THEME.dangerBg,
+                border: `1px solid ${THEME.dangerBorder}`,
+                color: THEME.dangerText,
+                boxShadow: THEME.shadow,
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 4 }}>Error</div>
+              <div style={{ fontSize: 13 }}>{err}</div>
+            </div>
+          ) : null}
+
+          <div style={SectionGrid("1.15fr 0.85fr")}>
+            <Card
+              title="Operational Health"
+              right={
+                health?.score?.status ? (
+                  <Pill tone={String(health.score.status).toLowerCase()}>
+                    {String(health.score.status).toUpperCase()}
+                  </Pill>
+                ) : null
+              }
+            >
+              <div style={{ fontSize: 13, color: THEME.subtleText, lineHeight: 1.55 }}>
+                {summary?.summary || "Operational health data is loading."}
+              </div>
+
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 10,
+                }}
+              >
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: `1px solid ${THEME.subtleBorder}`,
+                    background: "#F8FAFC",
+                  }}
+                >
+                  <Label>Active incidents</Label>
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>
+                    {health?.active_total ?? active.length}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: `1px solid ${THEME.subtleBorder}`,
+                    background: "#F8FAFC",
+                  }}
+                >
+                  <Label>SLA breached</Label>
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>
+                    {health?.breached_total ?? "—"}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: `1px solid ${THEME.subtleBorder}`,
+                    background: "#F8FAFC",
+                  }}
+                >
+                  <Label>MTTR average (7d)</Label>
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>
+                    {health?.mttr?.avg_minutes != null ? `${health.mttr.avg_minutes}m` : "—"}
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Morning Stand-up Summary" right={<Pill tone="amber">Team Lead</Pill>}>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid #FCD34D",
+                    background: "#FFFBEB",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#92400E" }}>
+                    TODAY'S PRIORITY
+                  </div>
+                  <div style={{ marginTop: 5, fontWeight: 900, color: THEME.heading }}>
+                    Review customer-facing payment and access incidents first.
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
+                  Confirm the scope of critical reports before escalation. Resolve quick wins where
+                  capacity allows, but do not allow them to delay high-impact investigations.
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Pill tone="red">Escalations: 1</Pill>
+                  <Pill tone="amber">Customer impact</Pill>
+                  <Pill>Revenue awareness</Pill>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <div style={SectionGrid("0.85fr 1.15fr")}>
+            <Card title="Revenue Performance" right={<Pill tone="green">Q1 Forecast</Pill>}>
+              <div style={{ display: "grid", gap: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <div>
+                    <Label>Q1 revenue progress</Label>
+                    <div style={{ fontSize: 24, fontWeight: 900 }}>€420,000</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <Label>Target</Label>
+                    <div style={{ fontSize: 16, fontWeight: 900 }}>€1,000,000</div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    height: 12,
+                    borderRadius: 999,
+                    background: "#E2E8F0",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "42%",
+                      height: "100%",
+                      borderRadius: 999,
+                      background: "#2563EB",
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontSize: 12, color: THEME.subtleText }}>
+                    42% of quarterly target achieved
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 900, color: "#166534" }}>
+                    On track
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    padding: 11,
+                    borderRadius: 12,
+                    border: "1px solid #BFDBFE",
+                    background: "#EFF6FF",
+                    color: "#1E3A8A",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Revenue context helps Operations assess the wider impact of customer-facing
+                  disruption and delayed delivery.
+                </div>
+              </div>
+            </Card>
+
+            <Card title="Operational Priorities">
+              <div style={{ display: "grid", gap: 8 }}>
+                {(recs?.recommendations || []).slice(0, 3).map((recommendation) => (
+                  <div
+                    key={recommendation.rank}
+                    style={{
+                      padding: 11,
+                      borderRadius: 12,
+                      border: `1px solid ${THEME.subtleBorder}`,
+                      background: "#F8FAFC",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900 }}>{recommendation.title}</div>
+                    <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4, lineHeight: 1.5 }}>
+                      {recommendation.why}
+                    </div>
+                  </div>
+                ))}
+
+                {!recs?.recommendations?.length ? (
+                  <div style={{ fontSize: 12, color: THEME.subtleText }}>
+                    No operational priorities are available.
+                  </div>
+                ) : null}
+              </div>
+            </Card>
+          </div>
+
+          <Card
+            title={`Active Incidents (${dashboardIncidents.length})`}
+            right={
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ minWidth: 160 }}>
+                  <Select
+                    value={incidentFilter}
+                    onChange={setIncidentFilter}
+                    options={[
+                      "All",
+                      "Immediate Review",
+                      "Review Soon",
+                      "Standard Review",
+                      "Investigating",
+                    ]}
+                  />
+                </div>
+                <div style={{ minWidth: 190 }}>
+                  <Select
+                    value={incidentSort}
+                    onChange={setIncidentSort}
+                    options={["Operational Attention", "Newest", "Oldest"]}
+                  />
+                </div>
+              </div>
+            }
+          >
+            <div style={{ fontSize: 12, color: THEME.subtleText, marginBottom: 10 }}>
+              Summary first. Expand an incident only when you are ready to review its operational context.
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {dashboardIncidents.map((incident) => {
+                const attention = operationalAttentionFor(incident);
+                const isExpanded = expandedIncidentId === incident.id;
+                const context = parseReportedContext(incident.description);
+                const signals = operationalSignalsFor(incident);
+
+                return (
+                  <div
+                    key={incident.id}
+                    style={{
+                      borderRadius: 14,
+                      border: isExpanded ? "2px solid #2563EB" : `1px solid ${THEME.subtleBorder}`,
+                      background: isExpanded ? "#F8FBFF" : "#FFFFFF",
+                      boxShadow: isExpanded
+                        ? "0 8px 20px rgba(37,99,235,0.10)"
+                        : "0 1px 3px rgba(15,23,42,0.04)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedIncidentId((current) =>
+                          current === incident.id ? "" : incident.id
+                        )
+                      }
+                      style={{
+                        width: "100%",
+                        padding: 13,
+                        border: 0,
+                        background: "transparent",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "auto 1fr auto",
+                          gap: 12,
+                          alignItems: "center",
+                        }}
+                      >
+                        <Pill tone={attention.tone}>
+                          <span style={{ marginRight: 6 }}>{attention.dot}</span>
+                          {attention.label}
+                        </Pill>
+
+                        <div>
+                          <div style={{ fontWeight: 900, color: THEME.heading }}>
+                            {incident.title}
+                          </div>
+                          <div
+                            style={{
+                              marginTop: 5,
+                              display: "flex",
+                              gap: 8,
+                              flexWrap: "wrap",
+                              alignItems: "center",
+                              fontSize: 12,
+                              color: THEME.subtleText,
+                            }}
+                          >
+                            <span>{incident.status}</span>
+                            <span>•</span>
+                            <span>{formatDateTime(incident.created_at)}</span>
+                            {incident.owner_team ? (
+                              <>
+                                <span>•</span>
+                                <span>Owner: {incident.owner_team}</span>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        <div style={{ color: "#2563EB", fontWeight: 900 }}>
+                          {isExpanded ? "Hide details ↑" : "Expand ↓"}
+                        </div>
+                      </div>
+                    </button>
+
+                    {isExpanded ? (
+                      <div
+                        style={{
+                          padding: "0 13px 13px",
+                          display: "grid",
+                          gridTemplateColumns: "0.95fr 1.05fr",
+                          gap: 10,
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: 12,
+                            borderRadius: 12,
+                            border: `1px solid ${THEME.subtleBorder}`,
+                            background: "#FFFFFF",
+                          }}
+                        >
+                          <div style={{ fontWeight: 900, color: THEME.heading }}>
+                            Report Details
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: 10,
+                              display: "grid",
+                              gridTemplateColumns: "1fr 1fr",
+                              gap: 10,
+                              fontSize: 12,
+                            }}
+                          >
+                            <div>
+                              <Label>Reported by</Label>
+                              <div style={{ fontWeight: 800 }}>{context.reporter}</div>
+                            </div>
+                            <div>
+                              <Label>Department</Label>
+                              <div style={{ fontWeight: 800 }}>{context.department}</div>
+                            </div>
+                            <div>
+                              <Label>Role</Label>
+                              <div style={{ fontWeight: 800 }}>{context.role}</div>
+                            </div>
+                            <div>
+                              <Label>Business area</Label>
+                              <div style={{ fontWeight: 800 }}>{context.businessArea}</div>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 12 }}>
+                            <Label>Description</Label>
+                            <div style={{ fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                              {context.description || "No description recorded."}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            padding: 12,
+                            borderRadius: 12,
+                            border: "1px solid #BFDBFE",
+                            background: "#EFF6FF",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 10,
+                              alignItems: "center",
+                            }}
+                          >
+                            <div style={{ fontWeight: 900, color: "#1E3A8A" }}>
+                              Operational Signals
+                            </div>
+                            <Pill tone={attention.tone}>{attention.label}</Pill>
+                          </div>
+
+                          <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                            {signals.map((signal, index) => (
+                              <div
+                                key={`${incident.id}-signal-${index}`}
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "20px 1fr",
+                                  gap: 8,
+                                  fontSize: 13,
+                                  lineHeight: 1.45,
+                                  color: "#1E3A8A",
+                                }}
+                              >
+                                <div style={{ fontWeight: 900 }}>⚠</div>
+                                <div>{signal}</div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: 12,
+                              paddingTop: 10,
+                              borderTop: "1px solid #BFDBFE",
+                              fontSize: 12,
+                              lineHeight: 1.5,
+                              color: "#1E3A8A",
+                            }}
+                          >
+                            Operational Signals assist initial review. Operational decisions remain
+                            the responsibility of the Operations Team.
+                          </div>
+
+                          <div style={{ marginTop: 12 }}>
+                            <Button
+                              onClick={async () => {
+                                await selectIncident(incident.id);
+                                setCurrentView("workspace");
+                              }}
+                              variant="primary"
+                            >
+                              Investigate Incident
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+
+              {!dashboardIncidents.length ? (
+                <div
+                  style={{
+                    padding: 18,
+                    borderRadius: 12,
+                    border: "1px dashed #CBD5E1",
+                    background: "#F8FAFC",
+                    color: THEME.subtleText,
+                    textAlign: "center",
+                  }}
+                >
+                  No incidents match the current filter.
+                </div>
+              ) : null}
+            </div>
+          </Card>
+
+          <Card
+            title={`Resolved Incidents (${resolvedFiltered.length})`}
+            right={<Pill>{kpiDays}-Day Reporting Period</Pill>}
+          >
+            <div style={{ display: "grid", gap: 8 }}>
+              {resolvedFiltered.slice(0, 5).map((incident) => (
+                <div
+                  key={incident.id}
+                  style={{
+                    padding: 10,
+                    borderRadius: 12,
+                    border: `1px solid ${THEME.subtleBorder}`,
+                    background: "#F8FAFC",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 850 }}>{incident.title}</div>
+                    <div style={{ marginTop: 4, fontSize: 12, color: THEME.subtleText }}>
+                      Resolved by {incident.resolved_by || "Unassigned"} •{" "}
+                      {formatDateTime(incident.resolved_at || incident.updated_at)}
+                    </div>
+                  </div>
+                  <Pill tone="green">Resolved</Pill>
+                </div>
+              ))}
+
+              {!resolvedFiltered.length ? (
+                <div style={{ fontSize: 12, color: THEME.subtleText }}>
+                  No resolved incidents for this reporting period.
+                </div>
+              ) : null}
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={Page}>
       <div style={Container}>
@@ -771,6 +1451,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Button onClick={() => setCurrentView("dashboard")}>Dashboard</Button>
             <Button onClick={() => setCurrentView("report")}>Report Issue</Button>
             <Button onClick={loadAll} disabled={loading} variant="primary">
               {loading ? "Refreshing…" : "Refresh"}
