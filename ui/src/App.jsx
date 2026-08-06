@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import ReportOperationalIssue from "./components/ReportOperationalIssue";
 
 const API = {
   health: "/api/ops/health",
@@ -307,6 +308,7 @@ function DangerButton({ children, onClick, disabled = false }) {
 }
 
 export default function App() {
+  const [currentView, setCurrentView] = useState("report");
   const [health, setHealth] = useState(null);
   const [summary, setSummary] = useState(null);
   const [recs, setRecs] = useState(null);
@@ -735,19 +737,45 @@ export default function App() {
   const createTitleValid = cTitle.trim().length >= 3;
   const createDescriptionValid = cDesc.trim().length >= 10;
 
+  if (currentView === "report") {
+    return (
+      <ReportOperationalIssue
+        onOpenDashboard={() => {
+          setCurrentView("dashboard");
+          loadAll();
+        }}
+      />
+    );
+  }
+
   return (
     <div style={Page}>
       <div style={Container}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Ops Triage Hub</div>
-            <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 2 }}>
-              Operational health, incidents, insights and KPIs
+            <div
+              style={{
+                marginTop: 3,
+                fontSize: 11,
+                fontWeight: 800,
+                color: "#2563EB",
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+              }}
+            >
+              Operational Decision Support
+            </div>
+            <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4 }}>
+              Helping Operations teams make better decisions when it matters most.
             </div>
           </div>
-          <Button onClick={loadAll} disabled={loading} variant="primary">
-            {loading ? "Refreshing…" : "Refresh"}
-          </Button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Button onClick={() => setCurrentView("report")}>Report Issue</Button>
+            <Button onClick={loadAll} disabled={loading} variant="primary">
+              {loading ? "Refreshing…" : "Refresh"}
+            </Button>
+          </div>
         </div>
 
         {err ? (
