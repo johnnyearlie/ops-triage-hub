@@ -918,7 +918,7 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+<div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
               <Button onClick={() => setCurrentView("report")}>Report Issue</Button>
               <Button onClick={loadAll} disabled={loading} variant="primary">
                 {loading ? "Refreshing…" : "Refresh"}
@@ -1431,9 +1431,20 @@ export default function App() {
   return (
     <div style={Page}>
       <div style={Container}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 16,
+            alignItems: "center",
+            paddingBottom: 12,
+            borderBottom: `1px solid ${THEME.subtleBorder}`,
+          }}
+        >
           <div>
-            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>Ops Triage Hub</div>
+            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 0.2 }}>
+              Ops Triage Hub
+            </div>
             <div
               style={{
                 marginTop: 3,
@@ -1444,17 +1455,24 @@ export default function App() {
                 textTransform: "uppercase",
               }}
             >
-              Operational Decision Support
+              Incident Workspace
             </div>
             <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4 }}>
-              Helping Operations teams make better decisions when it matters most.
+              Investigate, coordinate and resolve one operational incident at a time.
             </div>
           </div>
+
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <Button onClick={() => setCurrentView("dashboard")}>Dashboard</Button>
-            <Button onClick={() => setCurrentView("report")}>Report Issue</Button>
-            <Button onClick={loadAll} disabled={loading} variant="primary">
-              {loading ? "Refreshing…" : "Refresh"}
+            <Button
+              onClick={() => {
+                setCurrentView("dashboard");
+                loadAll();
+              }}
+            >
+              ← Active Incidents
+            </Button>
+            <Button onClick={refreshSelected} disabled={!selectedId || loading} variant="primary">
+              {loading ? "Refreshing…" : "Refresh Incident"}
             </Button>
           </div>
         </div>
@@ -1475,227 +1493,157 @@ export default function App() {
           </div>
         ) : null}
 
-        <div style={SectionGrid("1.2fr 1fr")}>
-          <Card
-            title="Operational Health"
-            right={
-              health?.score?.status ? (
-                <Pill tone={String(health.score.status).toLowerCase()}>
-                  {String(health.score.status).toUpperCase()}
-                </Pill>
-              ) : null
-            }
-          >
-            <div style={{ fontSize: 13, color: THEME.subtleText }}>{summary?.summary || "—"}</div>
-
-            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-              <div>
-                <Label>Active incidents</Label>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>{health?.active_total ?? "—"}</div>
-              </div>
-              <div>
-                <Label>SLA breached</Label>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>{health?.breached_total ?? "—"}</div>
-              </div>
-              <div>
-                <Label>MTTR avg (7d)</Label>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>
-                  {health?.mttr?.avg_minutes != null ? `${health.mttr.avg_minutes}m` : "—"}
+        {selectedIncident ? (
+          <>
+            <Card
+              title="Incident Investigation"
+              right={
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <Pill>{selectedIncident.priority}</Pill>
+                  <Pill>{selectedIncident.status}</Pill>
+                  {selectedIncident.owner_team ? (
+                    <Pill tone="green">Owner: {selectedIncident.owner_team}</Pill>
+                  ) : (
+                    <Pill tone="amber">Owner not assigned</Pill>
+                  )}
                 </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 900, marginBottom: 6 }}>Operational Insights</div>
-              <div style={{ display: "grid", gap: 8 }}>
-                {(recs?.recommendations || []).slice(0, 3).map((recommendation) => (
-                  <div
-                    key={recommendation.rank}
-                    style={{
-                      padding: 10,
-                      borderRadius: 12,
-                      border: `1px solid ${THEME.subtleBorder}`,
-                      background: "#F8FAFC",
-                    }}
-                  >
-                    <div style={{ fontWeight: 900 }}>{recommendation.title}</div>
-                    <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4 }}>
-                      {recommendation.why}
-                    </div>
-                  </div>
-                ))}
-                {!recs?.recommendations?.length ? (
-                  <div style={{ fontSize: 12, color: THEME.subtleText }}>No operational insights available.</div>
-                ) : null}
-              </div>
-            </div>
-          </Card>
-
-          <Card title="KPIs">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div>
-                <Label>Reporting Period</Label>
-                <Select value={String(kpiDays)} onChange={(value) => setKpiDays(Number(value))} options={["7", "30", "90"]} />
-              </div>
-              <div>
-                <Label>Resolved total</Label>
-                <div style={{ fontSize: 18, fontWeight: 900, paddingTop: 8 }}>{kpis?.resolved_count ?? "—"}</div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-              <div>
-                <Label>Critical Incidents Resolved</Label>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>{kpis?.p0_resolved_count ?? "—"}</div>
-              </div>
-              <div>
-                <Label>Avg MTTR</Label>
-                <div style={{ fontSize: 18, fontWeight: 900 }}>
-                  {kpis?.avg_mttr_minutes != null ? `${kpis.avg_mttr_minutes}m` : "—"}
-                </div>
-              </div>
-              <div>
-                <Label>Top Resolvers</Label>
-                <div style={{ fontSize: 12, color: THEME.subtleText, paddingTop: 8 }}>
-                  {topResolvers.length ? `${topResolvers[0].role} (${topResolvers[0].resolved})` : "—"}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                <div style={{ fontWeight: 900 }}>Assigned Resolvers</div>
-                <div style={{ width: 220 }}>
-                  <Select value={resolverFilter} onChange={setResolverFilter} options={resolverOptions} />
-                </div>
-              </div>
-
-              <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
-                {(topResolvers.length
-                  ? topResolvers
-                  : resolverOptions
-                      .filter((option) => option !== "All")
-                      .map((role) => ({
-                        role,
-                        resolved: resolved.filter((item) => (item.resolved_by || "Unassigned") === role).length,
-                      })))
-                  .filter((item) => resolverFilter === "All" || item.role === resolverFilter)
-                  .slice(0, 6)
-                  .map((item) => (
-                    <div
-                      key={item.role}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: `1px solid ${THEME.subtleBorder}`,
-                        background: "#F8FAFC",
-                      }}
-                    >
-                      <div style={{ fontWeight: 800 }}>{item.role}</div>
-                      <div style={{ fontVariantNumeric: "tabular-nums" }}>{item.resolved}</div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <div style={SectionGrid("0.9fr 1.1fr")}>
-          <Card title="Revenue Performance" right={<Pill tone="green">Q1 Forecast</Pill>}>
-            <div style={{ display: "grid", gap: 14 }}>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-                  <div>
-                    <Label>Q1 revenue progress</Label>
-                    <div style={{ fontSize: 24, fontWeight: 900, color: THEME.heading }}>€420,000</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <Label>Target</Label>
-                    <div style={{ fontSize: 16, fontWeight: 900, color: THEME.heading }}>€1,000,000</div>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 12,
-                    height: 12,
-                    borderRadius: 999,
-                    background: "#E2E8F0",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "42%",
-                      height: "100%",
-                      borderRadius: 999,
-                      background: "#2563EB",
-                    }}
-                  />
-                </div>
-
-                <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", gap: 10 }}>
-                  <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                    42% of quarterly target achieved
-                  </div>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "#166534" }}>
-                    On track
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  border: "1px solid #BFDBFE",
-                  background: "#EFF6FF",
-                  color: "#1E3A8A",
-                  fontSize: 13,
-                  lineHeight: 1.55,
-                }}
-              >
-                Revenue context helps Operations assess the wider business impact of customer-facing incidents,
-                service disruption and delayed delivery.
-              </div>
-
+              }
+            >
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
+                  gridTemplateColumns: "1.05fr 0.95fr",
+                  gap: 12,
+                  alignItems: "stretch",
                 }}
               >
                 <div
                   style={{
-                    padding: 10,
-                    borderRadius: 12,
+                    padding: 14,
+                    borderRadius: 14,
                     border: `1px solid ${THEME.subtleBorder}`,
-                    background: "#F8FAFC",
+                    background: "#FFFFFF",
                   }}
                 >
-                  <Label>Current quarter</Label>
-                  <div style={{ fontSize: 14, fontWeight: 900 }}>Q1</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 800,
+                      color: "#2563EB",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Incident selected
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 22, fontWeight: 900, color: THEME.heading }}>
+                    {selectedIncident.title}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 14,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                      gap: 10,
+                    }}
+                  >
+                    <div>
+                      <Label>Reported by</Label>
+                      <div style={{ fontSize: 13, fontWeight: 800 }}>
+                        {parseReportedContext(selectedIncident.description).reporter}
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Department</Label>
+                      <div style={{ fontSize: 13, fontWeight: 800 }}>
+                        {parseReportedContext(selectedIncident.description).department}
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Business area</Label>
+                      <div style={{ fontSize: 13, fontWeight: 800 }}>
+                        {parseReportedContext(selectedIncident.description).businessArea}
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Reported</Label>
+                      <div style={{ fontSize: 13, fontWeight: 800 }}>
+                        {formatDateTime(selectedIncident.created_at)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 14 }}>
+                    <Label>Reported issue</Label>
+                    <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                      {parseReportedContext(selectedIncident.description).description ||
+                        "No issue description was recorded."}
+                    </div>
+                  </div>
                 </div>
 
                 <div
                   style={{
-                    padding: 10,
-                    borderRadius: 12,
-                    border: `1px solid ${THEME.subtleBorder}`,
-                    background: "#F8FAFC",
+                    padding: 14,
+                    borderRadius: 14,
+                    border: "1px solid #BFDBFE",
+                    background: "#EFF6FF",
                   }}
                 >
-                  <Label>Forecast status</Label>
-                  <div style={{ fontSize: 14, fontWeight: 900, color: "#166534" }}>On track</div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      alignItems: "center",
+                    }}
+                  >
+                    <div style={{ fontWeight: 900, color: "#1E3A8A" }}>
+                      Operational Signals
+                    </div>
+                    <Pill tone={operationalAttentionFor(selectedIncident).tone}>
+                      {operationalAttentionFor(selectedIncident).label}
+                    </Pill>
+                  </div>
+
+                  <div style={{ marginTop: 11, display: "grid", gap: 8 }}>
+                    {operationalSignalsFor(selectedIncident).map((signal, index) => (
+                      <div
+                        key={`${selectedIncident.id}-workspace-signal-${index}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "20px 1fr",
+                          gap: 8,
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                          color: "#1E3A8A",
+                        }}
+                      >
+                        <div style={{ fontWeight: 900 }}>⚠</div>
+                        <div>{signal}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 12,
+                      paddingTop: 10,
+                      borderTop: "1px solid #BFDBFE",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: "#1E3A8A",
+                    }}
+                  >
+                    Operational Signals assist initial review. Operational decisions remain the
+                    responsibility of the Operations Team.
+                  </div>
                 </div>
               </div>
-            </div>
-          </Card>
+            </Card>
 
-          <div style={{ display: "grid", gap: 10 }}>
+            <div style={SectionGrid("0.82fr 1.18fr")}>
           <Card
             title="Update incident"
             right={
@@ -2643,109 +2591,29 @@ export default function App() {
               </div>
             </div>
           </Card>
-        </div>
-        </div>
-
-        <div style={SectionGrid("1fr 1fr")}>
-          <Card title={`Active incidents (${active.length})`}>
-            <div style={{ display: "grid", gap: 8 }}>
-              {active.slice(0, 50).map((incident) => (
-                <div
-                  key={incident.id}
-                  style={RowTile(selectedId === incident.id)}
-                  onMouseEnter={(event) => {
-                    if (selectedId === incident.id) return;
-                    event.currentTarget.style.transform = "translateY(-2px)";
-                    event.currentTarget.style.boxShadow = "0 6px 18px rgba(0,0,0,0.08)";
-                  }}
-                  onMouseLeave={(event) => {
-                    if (selectedId === incident.id) return;
-                    event.currentTarget.style.transform = "translateY(0)";
-                    event.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)";
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 900 }}>{incident.title}</div>
-                    <Button
-                      onClick={() => selectIncident(incident.id)}
-                      variant={selectedId === incident.id ? "primary" : "default"}
-                    >
-                      {selectedId === incident.id ? "✓ Selected" : "Select"}
-                    </Button>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <Pill>{incident.priority}</Pill>
-                    <Pill>{incident.status}</Pill>
-                    {incident.owner_team ? <Pill tone="green">Owner: {incident.owner_team}</Pill> : null}
-                    <span style={{ fontSize: 12, color: THEME.subtleText }}>
-                      {formatDateTime(incident.created_at)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-
-              {!active.length ? (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>No active incidents.</div>
-              ) : null}
+            </div>
+          </>
+        ) : (
+          <Card title="Incident Workspace">
+            <div
+              style={{
+                padding: 22,
+                borderRadius: 14,
+                border: "1px dashed #CBD5E1",
+                background: "#F8FAFC",
+                color: THEME.subtleText,
+                textAlign: "center",
+              }}
+            >
+              No incident is selected. Return to Active Incidents and choose an incident to investigate.
+              <div style={{ marginTop: 14 }}>
+                <Button onClick={() => setCurrentView("dashboard")} variant="primary">
+                  ← Active Incidents
+                </Button>
+              </div>
             </div>
           </Card>
-
-          <Card
-            title={`Resolved incidents (${resolvedFiltered.length})`}
-            right={<Pill>{kpiDays}-Day Reporting Period</Pill>}
-          >
-            <div style={{ display: "grid", gap: 8 }}>
-              {resolvedFiltered.slice(0, 5).map((incident) => (
-                <div
-                  key={incident.id}
-                  style={RowTile(selectedId === incident.id)}
-                  onMouseEnter={(event) => {
-                    if (selectedId === incident.id) return;
-                    event.currentTarget.style.transform = "translateY(-2px)";
-                    event.currentTarget.style.boxShadow = "0 6px 18px rgba(0,0,0,0.08)";
-                  }}
-                  onMouseLeave={(event) => {
-                    if (selectedId === incident.id) return;
-                    event.currentTarget.style.transform = "translateY(0)";
-                    event.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)";
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                    <div style={{ fontWeight: 900 }}>{incident.title}</div>
-                    <Button
-                      onClick={() => selectIncident(incident.id)}
-                      variant={selectedId === incident.id ? "primary" : "default"}
-                    >
-                      {selectedId === incident.id ? "✓ Selected" : "Select"}
-                    </Button>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                    <Pill>{incident.priority}</Pill>
-                    <Pill>{incident.status}</Pill>
-                    <Pill>{incident.resolved_by || "Unassigned"}</Pill>
-                    <span style={{ fontSize: 12, color: THEME.subtleText }}>
-                      {formatDateTime(incident.resolved_at || incident.updated_at)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-
-              {!resolvedFiltered.length ? (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  No resolved incidents for this reporting period.
-                </div>
-              ) : null}
-
-              {resolvedFiltered.length > 5 ? (
-                <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, color: THEME.subtleText }}>
-                  Displaying the 5 most recent resolved incidents
-                </div>
-              ) : null}
-            </div>
-          </Card>
-        </div>
+        )}
       </div>
     </div>
   );
