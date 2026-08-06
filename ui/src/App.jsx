@@ -794,7 +794,7 @@ export default function App() {
           </div>
         ) : null}
 
-        <div style={SectionGrid("1.25fr 1fr")}>
+        <div style={SectionGrid("1.2fr 1fr")}>
           <Card
             title="Operational Health"
             right={
@@ -921,103 +921,96 @@ export default function App() {
           </Card>
         </div>
 
-        <div style={SectionGrid("1fr 1fr")}>
-          <Card title="Create incident (triage-assisted)">
-            <div style={{ display: "grid", gap: 10 }}>
+        <div style={SectionGrid("0.9fr 1.1fr")}>
+          <Card title="Revenue Performance" right={<Pill tone="green">Q1 Forecast</Pill>}>
+            <div style={{ display: "grid", gap: 14 }}>
               <div>
-                <Label>Title</Label>
-                <input
-                  value={cTitle}
-                  onChange={(event) => setCTitle(event.target.value)}
-                  placeholder="e.g. Checkout failing for DE customers"
-                  style={InputBaseStyle(false)}
-                />
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                  <div>
+                    <Label>Q1 revenue progress</Label>
+                    <div style={{ fontSize: 24, fontWeight: 900, color: THEME.heading }}>€420,000</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <Label>Target</Label>
+                    <div style={{ fontSize: 16, fontWeight: 900, color: THEME.heading }}>€1,000,000</div>
+                  </div>
+                </div>
+
                 <div
                   style={{
-                    marginTop: 6,
-                    fontSize: 12,
-                    color: cTitle.length === 0 ? THEME.subtleText : createTitleValid ? "#16A34A" : "#D97706",
+                    marginTop: 12,
+                    height: 12,
+                    borderRadius: 999,
+                    background: "#E2E8F0",
+                    overflow: "hidden",
                   }}
                 >
-                  {cTitle.length === 0
-                    ? "Title must be at least 3 characters."
-                    : createTitleValid
-                      ? "✓ Title looks good"
-                      : `Title (${cTitle.trim().length} / 3)`}
+                  <div
+                    style={{
+                      width: "42%",
+                      height: "100%",
+                      borderRadius: 999,
+                      background: "#2563EB",
+                    }}
+                  />
+                </div>
+
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ fontSize: 12, color: THEME.subtleText }}>
+                    42% of quarterly target achieved
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "#166534" }}>
+                    On track
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <Label>Description</Label>
-                <textarea
-                  value={cDesc}
-                  onChange={(event) => setCDesc(event.target.value)}
-                  placeholder="What is happening? What is the business impact? When did it start?"
-                  rows={5}
-                  style={{ ...InputBaseStyle(false), resize: "vertical" }}
-                />
-                <div
-                  style={{
-                    marginTop: 6,
-                    fontSize: 12,
-                    color: cDesc.length === 0 ? THEME.subtleText : createDescriptionValid ? "#16A34A" : "#D97706",
-                  }}
-                >
-                  {cDesc.length === 0
-                    ? "Description must be at least 10 characters."
-                    : createDescriptionValid
-                      ? "✓ Description looks good"
-                      : `Description (${cDesc.trim().length} / 10)`}
-                </div>
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #BFDBFE",
+                  background: "#EFF6FF",
+                  color: "#1E3A8A",
+                  fontSize: 13,
+                  lineHeight: 1.55,
+                }}
+              >
+                Revenue context helps Operations assess the wider business impact of customer-facing incidents,
+                service disruption and delayed delivery.
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div>
-                  <Label>Priority</Label>
-                  <Select value={cPriority} onChange={setCPriority} options={PRIORITIES} />
-                </div>
-                <div style={{ display: "grid", alignContent: "end" }}>
-                  <Button onClick={runTriage} disabled={!createTitleValid || !createDescriptionValid}>
-                    Run operational assessment
-                  </Button>
-                </div>
-              </div>
-
-              {triage ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 10,
+                }}
+              >
                 <div
                   style={{
                     padding: 10,
-                    borderRadius: 14,
+                    borderRadius: 12,
                     border: `1px solid ${THEME.subtleBorder}`,
                     background: "#F8FAFC",
                   }}
                 >
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <Pill>Suggested: {triage.suggested_priority}</Pill>
-                    <div style={{ fontSize: 12, color: THEME.subtleText }}>{triage.rationale}</div>
-                  </div>
-                  <div style={{ marginTop: 8, fontWeight: 900, fontSize: 13 }}>Recommended next steps</div>
-                  <ul style={{ marginTop: 6, paddingLeft: 18, fontSize: 13, color: THEME.text }}>
-                    {(triage.next_steps || []).slice(0, 5).map((step, index) => (
-                      <li key={index}>{step}</li>
-                    ))}
-                  </ul>
+                  <Label>Current quarter</Label>
+                  <div style={{ fontSize: 14, fontWeight: 900 }}>Q1</div>
                 </div>
-              ) : null}
 
-              <Button
-                onClick={createIncident}
-                disabled={creating || !createTitleValid || !createDescriptionValid}
-                variant="primary"
-              >
-                {creating ? "Creating…" : "Create incident"}
-              </Button>
-
-              {!createTitleValid || !createDescriptionValid ? (
-                <div style={{ fontSize: 12, color: THEME.subtleText, textAlign: "center" }}>
-                  Complete the required fields to create an incident.
+                <div
+                  style={{
+                    padding: 10,
+                    borderRadius: 12,
+                    border: `1px solid ${THEME.subtleBorder}`,
+                    background: "#F8FAFC",
+                  }}
+                >
+                  <Label>Forecast status</Label>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#166534" }}>On track</div>
                 </div>
-              ) : null}
+              </div>
             </div>
           </Card>
 
