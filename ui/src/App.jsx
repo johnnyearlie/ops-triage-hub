@@ -359,6 +359,13 @@ export default function App() {
   const [notifyingStakeholders, setNotifyingStakeholders] = useState(false);
   const [notificationSuccess, setNotificationSuccess] = useState("");
   const [notificationError, setNotificationError] = useState("");
+  const [closureNotes, setClosureNotes] = useState("");
+  const [closureOwner, setClosureOwner] = useState("Ops Lead");
+  const [closureNotifyReporter, setClosureNotifyReporter] = useState(true);
+  const [closureNotifyStakeholders, setClosureNotifyStakeholders] = useState(true);
+  const [closingIncident, setClosingIncident] = useState(false);
+  const [closureError, setClosureError] = useState("");
+  const [closureSuccess, setClosureSuccess] = useState("");
 
   const [kpiDays, setKpiDays] = useState(90);
   const [resolverFilter, setResolverFilter] = useState("All");
@@ -535,6 +542,12 @@ export default function App() {
     setAllocationSuccess("");
     setNotificationError("");
     setNotificationSuccess("");
+    setClosureNotes("");
+    setClosureOwner("Ops Lead");
+    setClosureNotifyReporter(true);
+    setClosureNotifyStakeholders(true);
+    setClosureError("");
+    setClosureSuccess("");
     setStakeholderNotifications({
       "Operations Lead": true,
       "Customer Support": true,
@@ -757,6 +770,61 @@ export default function App() {
       setNotificationError(error.message || "Stakeholder notification could not be recorded.");
     } finally {
       setNotifyingStakeholders(false);
+    }
+  }
+
+  async function closeOperationalLifecycle() {
+    if (!selectedId || !selectedIncident) return;
+
+    if (!selectedIncident.owner_team) {
+      setClosureError("Assign an incident owner before closing the incident.");
+      setClosureSuccess("");
+      return;
+    }
+
+    if (!closureNotes.trim()) {
+      setClosureError("Add a short resolution summary before closing the incident.");
+      setClosureSuccess("");
+      return;
+    }
+
+    setClosingIncident(true);
+    setClosureError("");
+    setClosureSuccess("");
+
+    try {
+      const notifications = [];
+      if (closureNotifyReporter) notifications.push("reporter");
+      if (closureNotifyStakeholders) notifications.push("recorded stakeholders");
+
+      const notificationNote = notifications.length
+        ? ` Closure notification recorded for ${notifications.join(" and ")}.`
+        : "";
+
+      await jfetch(API.patchIncident(selectedId), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "resolved",
+          resolved_by: closureOwner,
+          resolution_notes: closureNotes.trim(),
+          note: `Incident closed after Operations review. Resolution: ${closureNotes.trim()}.${notificationNote}`,
+        }),
+      });
+
+      setUStatus("resolved");
+      setUResolvedBy(closureOwner);
+      setUNotes(closureNotes.trim());
+      await loadAll();
+      await loadTimeline(selectedId);
+      setTimelineCollapsed(false);
+      setClosureSuccess(
+        "Incident closed. It has left the active queue and is now available in Resolved Incidents."
+      );
+    } catch (error) {
+      setClosureError(error.message || "Incident could not be closed.");
+    } finally {
+      setClosingIncident(false);
     }
   }
 
@@ -2687,6 +2755,140 @@ export default function App() {
                     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
                       AI recommends. Operations approves or overrides. Ownership and stakeholder communication are recorded for accountability.
                     </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: 16,
+                      borderRadius: 14,
+                      border: selectedIncident?.status === "resolved" ? "2px solid #22C55E" : "2px solid #0F766E",
+                      background: selectedIncident?.status === "resolved" ? "#F0FDF4" : "#F0FDFA",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: selectedIncident?.status === "resolved" ? "#166534" : "#0F766E", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                          Resolution & Close
+                        </div>
+                        <div style={{ marginTop: 4, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
+                          Close the operational loop
+                        </div>
+                      </div>
+                      <Pill tone={selectedIncident?.status === "resolved" ? "green" : "amber"}>
+                        {selectedIncident?.status === "resolved" ? "✓ Incident closed" : "Operations approval required"}
+                      </Pill>
+                    </div>
+
+                    {selectedIncident?.status === "resolved" ? (
+                      <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                        <div style={{ padding: 14, borderRadius: 12, border: "1px solid #A7F3D0", background: "#FFFFFF" }}>
+                          <div style={{ fontWeight: 900, color: "#166534" }}>✓ Operational lifecycle complete</div>
+                          <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6, color: THEME.text }}>
+                            The incident is resolved, removed from the active operational queue and retained in Resolved Incidents for reporting and review.
+                          </div>
+                          <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                            <div>
+                              <Label>Resolved by</Label>
+                              <div style={{ fontSize: 13, fontWeight: 800 }}>
+                                {selectedIncident.resolved_by || closureOwner || "Operations"}
+                              </div>
+                            </div>
+                            <div>
+                              <Label>Resolution</Label>
+                              <div style={{ fontSize: 13, fontWeight: 800 }}>
+                                {selectedIncident.resolution_notes || closureNotes || "Resolution recorded"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {closureSuccess ? (
+                          <div style={{ padding: 11, borderRadius: 10, background: "#DCFCE7", border: "1px solid #86EFAC", color: "#166534", fontSize: 12, fontWeight: 800 }}>
+                            ✓ {closureSuccess}
+                          </div>
+                        ) : null}
+
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <Button
+                            onClick={() => {
+                              setCurrentView("dashboard");
+                              loadAll();
+                            }}
+                            variant="primary"
+                          >
+                            ← Return to Active Incidents
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+                        <div style={{ padding: 12, borderRadius: 12, border: "1px solid #99F6E4", background: "#FFFFFF", fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
+                          Operations verifies that the response is complete, records the resolution and closes the incident. Closure returns the issue to the wider business as a completed operational outcome.
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 10 }}>
+                          <div>
+                            <Label>Resolved by</Label>
+                            <Select value={closureOwner} onChange={setClosureOwner} options={ROLES} disabled={closingIncident} />
+                          </div>
+                          <div>
+                            <Label>Resolution summary (required)</Label>
+                            <textarea
+                              value={closureNotes}
+                              onChange={(event) => {
+                                setClosureNotes(event.target.value);
+                                if (closureError) setClosureError("");
+                              }}
+                              placeholder="What was fixed, what changed, and any follow-up required?"
+                              rows={3}
+                              disabled={closingIncident}
+                              style={{ ...InputBaseStyle(closingIncident), resize: "vertical" }}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
+                            Close the communication loop
+                          </div>
+                          <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
+                              <input type="checkbox" checked={closureNotifyReporter} onChange={(event) => setClosureNotifyReporter(event.target.checked)} disabled={closingIncident} />
+                              Notify reporter: incident resolved
+                            </label>
+                            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
+                              <input type="checkbox" checked={closureNotifyStakeholders} onChange={(event) => setClosureNotifyStakeholders(event.target.checked)} disabled={closingIncident} />
+                              Notify coordinated stakeholders
+                            </label>
+                          </div>
+                        </div>
+
+                        {!selectedIncident?.owner_team ? (
+                          <div style={{ padding: 10, borderRadius: 10, background: "#FFFBEB", border: "1px solid #FCD34D", color: "#92400E", fontSize: 12, fontWeight: 700 }}>
+                            Assign an incident owner before closing the incident.
+                          </div>
+                        ) : null}
+
+                        {closureError ? (
+                          <div style={{ padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>
+                            {closureError}
+                          </div>
+                        ) : null}
+
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
+                          <div style={{ fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                            Closing the incident records the resolution, updates the Activity History and moves it from Active Incidents to Resolved Incidents.
+                          </div>
+                          <Button
+                            onClick={closeOperationalLifecycle}
+                            disabled={closingIncident || !selectedIncident?.owner_team || !closureNotes.trim()}
+                            variant="primary"
+                          >
+                            {closingIncident ? "Closing Incident…" : "✓ Close Incident"}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div
