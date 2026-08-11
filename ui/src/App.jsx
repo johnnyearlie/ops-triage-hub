@@ -18,7 +18,7 @@ const API = {
 
 const PRIORITIES = ["P0", "P1", "P2", "P3"];
 const STATUSES = ["open", "investigating", "mitigated", "resolved"];
-const ROLES = ["On-call", "Ops Lead", "Support", "Engineering"];
+const ROLES = ["Operations Lead", "Engineering", "Customer Support", "Sales", "Product", "Finance", "Marketing", "HR / People", "Leadership", "On-call", "Ops Lead", "Support"];
 
 const STATUS_TRANSITIONS = {
   open: ["investigating"],
@@ -417,6 +417,7 @@ export default function App() {
 
   const [allocationTeam, setAllocationTeam] = useState("Ops Lead");
   const [allocationName, setAllocationName] = useState("");
+  const [allocationNote, setAllocationNote] = useState("");
   const [chooseDifferentOwner, setChooseDifferentOwner] = useState(false);
   const [allocating, setAllocating] = useState(false);
   const [allocationError, setAllocationError] = useState("");
@@ -435,6 +436,7 @@ export default function App() {
   const [notifyingStakeholders, setNotifyingStakeholders] = useState(false);
   const [notificationSuccess, setNotificationSuccess] = useState("");
   const [notificationError, setNotificationError] = useState("");
+  const [stakeholderNote, setStakeholderNote] = useState("");
   const [closureNotes, setClosureNotes] = useState("");
   const [closureOwner, setClosureOwner] = useState("Ops Lead");
   const [closureNotifyReporter, setClosureNotifyReporter] = useState(true);
@@ -628,8 +630,10 @@ export default function App() {
     setChooseDifferentOwner(false);
     setAllocationError("");
     setAllocationSuccess("");
+    setAllocationNote("");
     setNotificationError("");
     setNotificationSuccess("");
+    setStakeholderNote("");
     setClosureNotes("");
     setClosureOwner("Ops Lead");
     setClosureNotifyReporter(true);
@@ -805,12 +809,15 @@ export default function App() {
     setAllocationSuccess("");
 
     try {
-      const reason = useRecommendation
+      const baseReason = useRecommendation
         ? aiResult?.summary?.recommended_incident_owner?.reason ||
           "AI owner recommendation accepted after Operations Manager review."
         : aiResult?.summary
           ? "Operations Manager selected an owner manually after reviewing the AI operational assessment."
           : "Operations Manager assigned an incident owner without requiring an AI assessment.";
+      const reason = allocationNote.trim()
+        ? `${baseReason} Coordination note: ${allocationNote.trim()}`
+        : baseReason;
 
       await jfetch(API.allocateIncident(selectedId), {
         method: "POST",
@@ -839,6 +846,7 @@ export default function App() {
       await loadAll();
       await loadTimeline(selectedId);
       setChooseDifferentOwner(false);
+      setAllocationNote("");
       const recordedOwnerName = useRecommendation ? "" : allocationName.trim();
       setAllocationSuccess(
         `${ownerTeam}${recordedOwnerName ? ` — ${recordedOwnerName}` : ""} is now the recorded incident owner.`
@@ -874,13 +882,14 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: statusForCoordination,
-          note: `Stakeholders notified: ${recipients.join(", ")}. Incident status: ${statusForCoordination}.`,
+          note: `Stakeholders notified: ${recipients.join(", ")}. Incident status: ${statusForCoordination}.${stakeholderNote.trim() ? ` Coordination note: ${stakeholderNote.trim()}` : ""}`,
         }),
       });
 
       setUStatus(statusForCoordination);
       await loadAll();
       await loadTimeline(selectedId);
+      setStakeholderNote("");
       setNotificationSuccess(`Notification recorded for ${recipients.join(", ")}.`);
     } catch (error) {
       setNotificationError(error.message || "Stakeholder notification could not be recorded.");
@@ -2930,7 +2939,7 @@ export default function App() {
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #BFDBFE", fontSize: 11, fontWeight: 700, color: "#475569" }}>
                   {tokenUsageFor(aiResult)
                     ? `AI usage · ${tokenUsageFor(aiResult).total != null ? `${tokenUsageFor(aiResult).total.toLocaleString()} tokens` : "token total unavailable"}${tokenUsageFor(aiResult).input != null ? ` · ${tokenUsageFor(aiResult).input.toLocaleString()} input` : ""}${tokenUsageFor(aiResult).output != null ? ` · ${tokenUsageFor(aiResult).output.toLocaleString()} output` : ""}`
-                    : "AI usage · Token usage is not returned by the current API response."}
+                    : "AI usage · This assessment response did not include token counts. No estimate is shown."}
                 </div>
               </div>
             </div>
@@ -3042,6 +3051,16 @@ export default function App() {
                             style={InputBaseStyle(false)}
                           />
                         </div>
+                        <div>
+                          <Label>Assignment note (optional)</Label>
+                          <textarea
+                            value={allocationNote}
+                            onChange={(event) => setAllocationNote(event.target.value)}
+                            placeholder="Why is this owner being assigned, or what should they investigate?"
+                            rows={3}
+                            style={{ ...InputBaseStyle(false), resize: "vertical" }}
+                          />
+                        </div>
                         <Button
                           onClick={() => allocateIncident(false)}
                           disabled={allocating}
@@ -3116,6 +3135,18 @@ export default function App() {
                         <span>{stakeholderNotifications[stakeholder] ? "✓ " : ""}{stakeholder}</span>
                       </label>
                     ))}
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <Label>Coordination note (optional)</Label>
+                    <textarea
+                      value={stakeholderNote}
+                      onChange={(event) => setStakeholderNote(event.target.value)}
+                      placeholder="What do stakeholders need to know or do?"
+                      rows={3}
+                      disabled={selectedReadOnly}
+                      style={{ ...InputBaseStyle(selectedReadOnly), resize: "vertical" }}
+                    />
                   </div>
 
                   <div style={{ marginTop: 10 }}>

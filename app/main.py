@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
-from app.ai import generate_ai_summary
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +11,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.ai import generate_ai_summary
+
 # =========================================
 # Config
 # =========================================
@@ -18,7 +20,7 @@ DB_PATH = "ops_triage.db"
 
 PRIORITIES = ["P0", "P1", "P2", "P3"]
 STATUSES = ["open", "investigating", "mitigated", "resolved"]
-ROLES = ["On-call", "Ops Lead", "Support", "Engineering"]
+ROLES = ["Operations Lead", "Engineering", "Customer Support", "Sales", "Product", "Finance", "Marketing", "HR / People", "Leadership", "On-call", "Ops Lead", "Support"]
 
 SLA_MINUTES = {"P0": 30, "P1": 120, "P2": 480, "P3": 1440}
 
@@ -120,7 +122,13 @@ def init_db() -> None:
             updated_at TEXT NOT NULL DEFAULT '',
             resolved_at TEXT,
             resolved_by TEXT,
-            resolution_notes TEXT
+            resolution_notes TEXT,
+            owner_team TEXT,
+            owner_name TEXT,
+            owner_assigned_at TEXT,
+            owner_assigned_by TEXT,
+            owner_assignment_reason TEXT,
+            recommendation_accepted INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -150,6 +158,18 @@ def init_db() -> None:
         cur.execute("ALTER TABLE incidents ADD COLUMN resolved_at TEXT")
     if not _has_column(conn, "incidents", "resolved_by"):
         cur.execute("ALTER TABLE incidents ADD COLUMN resolved_by TEXT")
+    if not _has_column(conn, "incidents", "owner_team"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN owner_team TEXT")
+    if not _has_column(conn, "incidents", "owner_name"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN owner_name TEXT")
+    if not _has_column(conn, "incidents", "owner_assigned_at"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN owner_assigned_at TEXT")
+    if not _has_column(conn, "incidents", "owner_assigned_by"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN owner_assigned_by TEXT")
+    if not _has_column(conn, "incidents", "owner_assignment_reason"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN owner_assignment_reason TEXT")
+    if not _has_column(conn, "incidents", "recommendation_accepted"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN recommendation_accepted INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
     conn.close()
@@ -186,6 +206,12 @@ def incident_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "resolved_at": _row_get(row, "resolved_at"),
         "resolved_by": _row_get(row, "resolved_by"),
         "resolution_notes": _row_get(row, "resolution_notes"),
+        "owner_team": _row_get(row, "owner_team"),
+        "owner_name": _row_get(row, "owner_name"),
+        "owner_assigned_at": _row_get(row, "owner_assigned_at"),
+        "owner_assigned_by": _row_get(row, "owner_assigned_by"),
+        "owner_assignment_reason": _row_get(row, "owner_assignment_reason"),
+        "recommendation_accepted": bool(_row_get(row, "recommendation_accepted", 0)),
     }
 
 
@@ -335,6 +361,14 @@ class TriageResponse(BaseModel):
 
 class AIAssistantRequest(BaseModel):
     incident_id: str = Field(min_length=1)
+
+
+class IncidentAllocationRequest(BaseModel):
+    owner_team: str
+    owner_name: Optional[str] = None
+    allocated_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
+    reason: str = Field(default="Owner assigned by Operations Manager", min_length=1, max_length=5000)
+    recommendation_accepted: bool = False
 
 
 # =========================================
@@ -508,6 +542,84 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
     out = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     conn.close()
     return incident_row_to_dict(out)
+
+
+@app.post("/incidents/{incident_id}/allocate")
+def allocate_incident(incident_id: str, payload: IncidentAllocationRequest) -> Dict[str, Any]:
+    """
+    Assign accountable ownership to an incident and record the decision
+    in Activity History.
+    """
+    owner_team = normalize_role(payload.owner_team)
+    owner_name = payload.owner_name.strip() if payload.owner_name and payload.owner_name.strip() else None
+    allocated_by = payload.allocated_by.strip()
+    reason = payload.reason.strip()
+    assigned_at = dt_to_iso(utcnow())
+
+    conn = db()
+    try:
+        row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        conn.execute(
+            """
+            UPDATE incidents
+            SET owner_team = ?,
+                owner_name = ?,
+                owner_assigned_at = ?,
+                owner_assigned_by = ?,
+                owner_assignment_reason = ?,
+                recommendation_accepted = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                owner_team,
+                owner_name,
+                assigned_at,
+                allocated_by,
+                reason,
+                1 if payload.recommendation_accepted else 0,
+                assigned_at,
+                incident_id,
+            ),
+        )
+
+        decision = (
+            "AI recommendation accepted by Operations Manager"
+            if payload.recommendation_accepted
+            else "Owner assigned manually by Operations Manager"
+        )
+
+        add_timeline(
+            conn,
+            incident_id,
+            "owner_assigned",
+            None,
+            json.dumps(
+                {
+                    "owner_team": owner_team,
+                    "owner_name": owner_name,
+                    "allocated_by": allocated_by,
+                    "reason": reason,
+                    "decision": decision,
+                    "recommendation_accepted": payload.recommendation_accepted,
+                }
+            ),
+        )
+
+        conn.commit()
+        updated = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        return incident_row_to_dict(updated)
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Incident allocation failed: {exc}") from exc
+    finally:
+        conn.close()
 
 
 @app.delete("/incidents/{incident_id}")
@@ -854,49 +966,138 @@ def ops_recommendations_summary() -> Dict[str, Any]:
 
 
 # =========================================
-# AI Operations Assistant (mock vertical slice)
+# AI Operations Assistant
 # =========================================
 @app.post("/ai/assistant")
 def ai_assistant(payload: AIAssistantRequest) -> Dict[str, Any]:
+    """
+    Generate an AI Operational Assessment and record the generation event
+    in the incident Activity History. Operational decisions remain human-owned.
+    """
+    conn = db()
+    try:
+        incident = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (payload.incident_id,),
+        ).fetchone()
+
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        timeline_rows = conn.execute(
+            """
+            SELECT event_type, created_at, old_value, new_value
+            FROM timeline
+            WHERE incident_id = ?
+            ORDER BY created_at ASC
+            LIMIT 100
+            """,
+            (payload.incident_id,),
+        ).fetchall()
+
+        incident_data = incident_row_to_dict(incident)
+        timeline_data = [dict(row) for row in timeline_rows]
+
+        result = generate_ai_summary(incident_data, timeline_data)
+
+        summary = result.get("summary") if isinstance(result, dict) else None
+        if not summary:
+            raise HTTPException(
+                status_code=502,
+                detail="AI Operational Assessment did not return a valid structured summary.",
+            )
+
+        audit_value = json.dumps(
+            {
+                "model": result.get("model"),
+                "source": result.get("source"),
+                "generated_at": result.get("generated_at"),
+                "usage": result.get("usage"),
+            }
+        )
+        add_timeline(
+            conn,
+            payload.incident_id,
+            "ai_assessment_generated",
+            None,
+            audit_value,
+        )
+        conn.commit()
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI Operational Assessment unavailable: {exc}",
+        )
+    finally:
+        conn.close()
+
+
+# =========================================
+# KPIs
+# =========================================
+@app.get("/ops/kpis")
+def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
+    """
+    KPIs derived from incidents table.
+
+    Uses:
+      - incidents.created_at
+      - incidents.status
+      - incidents.resolved_at
+      - incidents.resolved_by
+    """
+    cutoff = utcnow() - timedelta(days=days)
 
     conn = db()
-
-    incident = conn.execute(
-        "SELECT * FROM incidents WHERE id = ?",
-        (payload.incident_id,),
-    ).fetchone()
-
-    if not incident:
-        conn.close()
-        raise HTTPException(
-            status_code=404,
-            detail="Incident not found",
-        )
-
-    timeline_rows = conn.execute(
+    rows = conn.execute(
         """
-        SELECT *
-        FROM timeline
-        WHERE incident_id = ?
-        ORDER BY created_at ASC
+        SELECT id, priority, created_at, resolved_at, resolved_by
+        FROM incidents
+        WHERE status = 'resolved'
+          AND COALESCE(NULLIF(resolved_at,''), NULLIF(updated_at,''), created_at) >= ?
         """,
-        (payload.incident_id,),
+        (dt_to_iso(cutoff),),
     ).fetchall()
-
     conn.close()
 
-    summary = generate_ai_summary(
-        incident_row_to_dict(incident),
-        [dict(row) for row in timeline_rows],
-    )
+    resolved_count = len(rows)
+    p0_resolved_count = 0
+    mttrs: List[int] = []
+    by_role: Dict[str, int] = {}
+
+    for r in rows:
+        if r["priority"] == "P0":
+            p0_resolved_count += 1
+
+        cdt = iso_to_dt(r["created_at"])
+        rdt = iso_to_dt(r["resolved_at"]) if r["resolved_at"] else None
+        if cdt and rdt and rdt >= cdt:
+            mttrs.append(minutes_between(cdt, rdt))
+
+        role = (r["resolved_by"] or "").strip() or "Unassigned"
+        by_role[role] = by_role.get(role, 0) + 1
+
+    avg_mttr = int(sum(mttrs) / len(mttrs)) if mttrs else None
+
+    top_resolvers = sorted(
+        [{"role": k, "resolved": v} for k, v in by_role.items()],
+        key=lambda x: x["resolved"],
+        reverse=True,
+    )[:5]
 
     return {
-        "success": True,
-        "source": "OpenAI",
-        "model": "gpt-5.5",
         "generated_at": dt_to_iso(utcnow()),
-        "summary": summary,
+        "window_days": days,
+        "resolved_count": resolved_count,
+        "p0_resolved_count": p0_resolved_count,
+        "avg_mttr_minutes": avg_mttr,
+        "top_resolvers": top_resolvers,
     }
+
 
 # =========================================
 # AI Triage (demo rules)
