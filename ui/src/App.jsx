@@ -97,6 +97,76 @@ function formatDateTime(isoString) {
   })} · ${time}`;
 }
 
+function formatDurationMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0) return "—";
+
+  const rounded = Math.round(minutes);
+  const days = Math.floor(rounded / 1440);
+  const hours = Math.floor((rounded % 1440) / 60);
+  const mins = rounded % 60;
+
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function incidentWithinDays(incident, days) {
+  const source = incident?.resolved_at || incident?.updated_at || incident?.created_at;
+  const date = new Date(source || 0);
+  if (Number.isNaN(date.getTime())) return true;
+  const ageMs = Date.now() - date.getTime();
+  return ageMs <= Number(days) * 86_400_000;
+}
+
+function signalColorForTone(tone) {
+  if (tone === "red") return "#DC2626";
+  if (tone === "amber") return "#D97706";
+  if (tone === "green") return "#16A34A";
+  return "#2563EB";
+}
+
+function loadStoredAssessment(incidentId) {
+  if (!incidentId || typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`ops-triage-ai-assessment:${incidentId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredAssessment(incidentId, result) {
+  if (!incidentId || !result || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`ops-triage-ai-assessment:${incidentId}`, JSON.stringify(result));
+  } catch {
+    // Local persistence is a V1 demo convenience only; assessment generation still succeeds.
+  }
+}
+
+function tokenUsageFor(result) {
+  const usage = result?.usage || result?.token_usage || result?.response_usage || null;
+  if (!usage) return null;
+
+  const total = Number(
+    usage.total_tokens ?? usage.total ?? usage.tokens ?? usage.totalTokens ?? NaN
+  );
+  const input = Number(
+    usage.input_tokens ?? usage.prompt_tokens ?? usage.input ?? usage.inputTokens ?? NaN
+  );
+  const output = Number(
+    usage.output_tokens ?? usage.completion_tokens ?? usage.output ?? usage.outputTokens ?? NaN
+  );
+
+  if (!Number.isFinite(total) && !Number.isFinite(input) && !Number.isFinite(output)) return null;
+  return {
+    total: Number.isFinite(total) ? total : null,
+    input: Number.isFinite(input) ? input : null,
+    output: Number.isFinite(output) ? output : null,
+  };
+}
+
 function parseTimelineAllocation(event) {
   if (event?.event_type !== "owner_assigned" || !event?.new_value) return null;
 
@@ -353,8 +423,14 @@ export default function App() {
   const [allocationSuccess, setAllocationSuccess] = useState("");
   const [stakeholderNotifications, setStakeholderNotifications] = useState({
     "Operations Lead": true,
+    Engineering: true,
     "Customer Support": true,
     Sales: false,
+    Product: false,
+    Finance: false,
+    Marketing: false,
+    "HR / People": false,
+    Leadership: false,
   });
   const [notifyingStakeholders, setNotifyingStakeholders] = useState(false);
   const [notificationSuccess, setNotificationSuccess] = useState("");
@@ -377,8 +453,20 @@ export default function App() {
   const [revenueSectionOpen, setRevenueSectionOpen] = useState(true);
   const [activeSectionOpen, setActiveSectionOpen] = useState(true);
   const [resolvedSectionOpen, setResolvedSectionOpen] = useState(false);
+  const [archiveSectionOpen, setArchiveSectionOpen] = useState(false);
+  const [resolvedSearch, setResolvedSearch] = useState("");
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [archivedIds, setArchivedIds] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem("ops-triage-archived-incidents");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
 
-  const TIMELINE_MAX_HEIGHT = 260;
+  const [workspaceSection, setWorkspaceSection] = useState("investigation");
 
   const selectedIncident = useMemo(
     () => active.find((item) => item.id === selectedId) || resolved.find((item) => item.id === selectedId) || null,
@@ -409,7 +497,7 @@ export default function App() {
         jfetch(API.recs),
         jfetch(API.active),
         jfetch(`${API.kpis}?days=${kpiDays}`),
-        jfetch(`${API.incidents}?status=resolved&days=${kpiDays}&limit=200`),
+        jfetch(`${API.incidents}?status=resolved&days=365&limit=200`),
       ]);
 
       setHealth(nextHealth);
@@ -431,7 +519,7 @@ export default function App() {
     try {
       const [nextActive, nextResolved] = await Promise.all([
         jfetch(API.active),
-        jfetch(`${API.incidents}?status=resolved&days=${kpiDays}&limit=200`),
+        jfetch(`${API.incidents}?status=resolved&days=365&limit=200`),
       ]);
 
       const activeList = Array.isArray(nextActive) ? nextActive : [];
@@ -463,7 +551,7 @@ export default function App() {
       try {
         const [nextKpis, nextResolved] = await Promise.all([
           jfetch(`${API.kpis}?days=${kpiDays}`),
-          jfetch(`${API.incidents}?status=resolved&days=${kpiDays}&limit=200`),
+          jfetch(`${API.incidents}?status=resolved&days=365&limit=200`),
         ]);
         setKpis(nextKpis);
         setResolved(Array.isArray(nextResolved) ? nextResolved : []);
@@ -535,7 +623,7 @@ export default function App() {
     setUpdateSuccess(false);
     setConfirmDelete(false);
     setDeleteSuccess(false);
-    setAiResult(null);
+    setAiResult(loadStoredAssessment(id));
     setAiError("");
     setChooseDifferentOwner(false);
     setAllocationError("");
@@ -550,11 +638,18 @@ export default function App() {
     setClosureSuccess("");
     setStakeholderNotifications({
       "Operations Lead": true,
+      Engineering: true,
       "Customer Support": true,
       Sales: false,
+      Product: false,
+      Finance: false,
+      Marketing: false,
+      "HR / People": false,
+      Leadership: false,
     });
 
     const incident = active.find((item) => item.id === id) || resolved.find((item) => item.id === id);
+    setWorkspaceSection(incident?.status === "resolved" ? "resolution" : "investigation");
     if (incident) {
       setUStatus(incident.status || "investigating");
       setUPriority(incident.priority || "");
@@ -658,7 +753,25 @@ export default function App() {
         body: JSON.stringify({ incident_id: selectedId }),
       });
 
+      const summary = result?.summary || null;
+      const failureText = `${summary?.executive_summary || ""} ${summary?.business_impact || ""}`.toLowerCase();
+      const looksLikeProviderFailure =
+        !summary ||
+        failureText.includes("unable to generate the ai operational assessment") ||
+        failureText.includes("error code: 520") ||
+        failureText.includes("cloudflare") ||
+        failureText.includes("unknown_origin_error");
+
+      if (looksLikeProviderFailure) {
+        setAiResult(null);
+        setAiError(
+          "AI Operational Assessment is temporarily unavailable. The incident can still be investigated, assigned, coordinated and resolved manually. Please retry the assessment."
+        );
+        return;
+      }
+
       setAiResult(result);
+      saveStoredAssessment(selectedId, result);
       const recommendedOwner = result?.summary?.recommended_incident_owner?.owner;
       if (recommendedOwner && ROLES.includes(recommendedOwner)) {
         setAllocationTeam(recommendedOwner);
@@ -667,16 +780,19 @@ export default function App() {
       setAllocationError("");
       setAllocationSuccess("");
     } catch (error) {
-      setAiError(error.message || "AI Assistant request failed");
+      setAiResult(null);
+      setAiError(
+        "AI Operational Assessment is temporarily unavailable. The incident can still be investigated, assigned, coordinated and resolved manually. Please retry the assessment."
+      );
     } finally {
       setAiLoading(false);
     }
   }
 
   async function allocateIncident(useRecommendation) {
-    if (!selectedId || !selectedIncident || !aiResult?.summary) return;
+    if (!selectedId || !selectedIncident) return;
 
-    const recommendedOwner = aiResult.summary.recommended_incident_owner?.owner;
+    const recommendedOwner = aiResult?.summary?.recommended_incident_owner?.owner;
     const ownerTeam = useRecommendation ? recommendedOwner : allocationTeam;
 
     if (!ownerTeam || !ROLES.includes(ownerTeam)) {
@@ -690,9 +806,11 @@ export default function App() {
 
     try {
       const reason = useRecommendation
-        ? aiResult.summary.recommended_incident_owner?.reason ||
+        ? aiResult?.summary?.recommended_incident_owner?.reason ||
           "AI owner recommendation accepted after Operations Manager review."
-        : "Operations Manager selected a different owner after reviewing the AI operational assessment.";
+        : aiResult?.summary
+          ? "Operations Manager selected an owner manually after reviewing the AI operational assessment."
+          : "Operations Manager assigned an incident owner without requiring an AI assessment.";
 
       await jfetch(API.allocateIncident(selectedId), {
         method: "POST",
@@ -720,7 +838,6 @@ export default function App() {
 
       await loadAll();
       await loadTimeline(selectedId);
-      setTimelineCollapsed(false);
       setChooseDifferentOwner(false);
       const recordedOwnerName = useRecommendation ? "" : allocationName.trim();
       setAllocationSuccess(
@@ -764,7 +881,6 @@ export default function App() {
       setUStatus(statusForCoordination);
       await loadAll();
       await loadTimeline(selectedId);
-      setTimelineCollapsed(false);
       setNotificationSuccess(`Notification recorded for ${recipients.join(", ")}.`);
     } catch (error) {
       setNotificationError(error.message || "Stakeholder notification could not be recorded.");
@@ -817,7 +933,6 @@ export default function App() {
       setUNotes(closureNotes.trim());
       await loadAll();
       await loadTimeline(selectedId);
-      setTimelineCollapsed(false);
       setClosureSuccess(
         "Incident closed. It has left the active queue and is now available in Resolved Incidents."
       );
@@ -828,14 +943,57 @@ export default function App() {
     }
   }
 
+  function persistArchivedIds(nextIds) {
+    setArchivedIds(nextIds);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("ops-triage-archived-incidents", JSON.stringify(nextIds));
+      } catch {
+        // V1 demo archive state remains in-memory if localStorage is unavailable.
+      }
+    }
+  }
+
+  function archiveIncident(id) {
+    if (!id || archivedIds.includes(id)) return;
+    persistArchivedIds([...archivedIds, id]);
+  }
+
+  function restoreArchivedIncident(id) {
+    persistArchivedIds(archivedIds.filter((item) => item !== id));
+  }
+
+  function openActivitySection() {
+    setWorkspaceSection("activity");
+    if (selectedId) loadTimeline(selectedId);
+  }
+
+  const selectedReadOnly = selectedIncident?.status === "resolved";
   const invalidResolve = uStatus === "resolved" && (!uResolvedBy || uNotes.trim().length === 0);
   const allowedStatusesForSelected = selectedIncident ? allowedNextStatuses(selectedIncident.status) : STATUSES;
 
   const topResolvers = kpis?.top_resolvers || [];
-  const resolvedFiltered =
-    resolverFilter === "All"
-      ? resolved
-      : resolved.filter((item) => (item.resolved_by || "Unassigned") === resolverFilter);
+  const resolvedSearchTerm = resolvedSearch.trim().toLowerCase();
+  const archiveSearchTerm = archiveSearch.trim().toLowerCase();
+  const historicalResolved = resolved.filter((incident) => !incidentWithinDays(incident, 90));
+  const historicalIds = new Set(historicalResolved.map((incident) => incident.id));
+
+  const resolvedFiltered = resolved.filter((incident) => {
+    if (archivedIds.includes(incident.id) || historicalIds.has(incident.id)) return false;
+    if (!incidentWithinDays(incident, kpiDays)) return false;
+    if (resolverFilter !== "All" && (incident.resolved_by || "Unassigned") !== resolverFilter) return false;
+    if (!resolvedSearchTerm) return true;
+    const source = `${incident.title || ""} ${incident.description || ""} ${incident.owner_team || ""} ${incident.resolved_by || ""}`.toLowerCase();
+    return source.includes(resolvedSearchTerm);
+  });
+
+  const archivedFiltered = resolved.filter((incident) => {
+    const archived = archivedIds.includes(incident.id) || historicalIds.has(incident.id);
+    if (!archived) return false;
+    if (!archiveSearchTerm) return true;
+    const source = `${incident.title || ""} ${incident.description || ""} ${incident.owner_team || ""} ${incident.resolved_by || ""}`.toLowerCase();
+    return source.includes(archiveSearchTerm);
+  });
 
   const resolverOptions = useMemo(() => {
     const fromKpis = topResolvers.map((item) => item.role);
@@ -977,6 +1135,17 @@ export default function App() {
     });
   }, [active, incidentFilter, incidentSort]);
 
+  function mttrMinutesForPeriod() {
+    const candidate =
+      kpis?.avg_mttr_minutes ??
+      kpis?.average_mttr_minutes ??
+      kpis?.avg_mttr ??
+      kpis?.mttr?.avg_minutes ??
+      (kpiDays === 7 ? health?.mttr?.avg_minutes : null);
+    const value = Number(candidate);
+    return Number.isFinite(value) ? value : null;
+  }
+
   function operationalHealthNarrative() {
     const status = String(health?.score?.status || "").toUpperCase();
     const breached = Number(health?.breached_total ?? 0);
@@ -994,9 +1163,9 @@ export default function App() {
       activeCount > 0
         ? `${activeCount} incident${activeCount === 1 ? " is" : "s are"} currently active across the operation.`
         : "There are no active incidents requiring operational review.",
-      health?.mttr?.avg_minutes != null
-        ? `Average resolution time over the last 7 days is ${health.mttr.avg_minutes} minutes.`
-        : "A 7-day MTTR value is not yet available because the reporting period does not contain enough resolved incident data.",
+      mttrMinutesForPeriod() != null
+        ? `Average resolution time over the last ${kpiDays} days is ${formatDurationMinutes(mttrMinutesForPeriod())}.`
+        : `An MTTR value is not available for the selected ${kpiDays}-day reporting period.`,
     ];
 
     return { opening, statements };
@@ -1109,9 +1278,16 @@ export default function App() {
 
           <div style={SectionGrid("1.15fr 0.85fr")}>
             <Card
-              title="Operational Health"
+              title="Operational Health KPIs"
               right={
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <div style={{ width: 92 }}>
+                    <Select
+                      value={String(kpiDays)}
+                      onChange={(value) => setKpiDays(Number(value))}
+                      options={["7", "30", "90"]}
+                    />
+                  </div>
                   {health?.score?.status ? (
                     <Pill tone={String(health.score.status).toLowerCase()}>
                       {String(health.score.status).toUpperCase()}
@@ -1178,16 +1354,16 @@ export default function App() {
                     background: "#F8FAFC",
                   }}
                 >
-                  <Label>MTTR average (7d)</Label>
+                  <Label>MTTR average ({kpiDays}d)</Label>
                   <div style={{ fontSize: 22, fontWeight: 900 }}>
-                    {health?.mttr?.avg_minutes != null ? `${health.mttr.avg_minutes}m` : "—"}
+                    {formatDurationMinutes(mttrMinutesForPeriod())}
                   </div>
                 </div>
               </div>
                 </>
               ) : (
                 <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  Operational Health is collapsed.
+                  Operational Health KPIs is collapsed.
                 </div>
               )}
             </Card>
@@ -1232,6 +1408,10 @@ export default function App() {
                   <Pill tone="amber">Customer impact</Pill>
                   <Pill>Revenue awareness</Pill>
                 </div>
+
+                <div style={{ paddingTop: 8, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 11, color: THEME.subtleText, lineHeight: 1.45 }}>
+                  Stand-up context can be ingested from collaboration and meeting-summary tools via API. Demo data represents an imported morning operations summary.
+                </div>
               </div>
                 </>
               ) : (
@@ -1242,7 +1422,7 @@ export default function App() {
             </Card>
           </div>
 
-          <div style={SectionGrid("0.85fr 1.15fr")}>
+          <div style={{ ...SectionGrid("0.85fr 1.15fr"), alignItems: "stretch" }}>
             <Card
               title="Revenue Performance"
               right={
@@ -1557,7 +1737,7 @@ export default function App() {
                                   color: "#1E3A8A",
                                 }}
                               >
-                                <div style={{ fontWeight: 900 }}>⚠</div>
+                                <div style={{ fontWeight: 900, color: signalColorForTone(attention.tone) }}>⚠</div>
                                 <div>{signal}</div>
                               </div>
                             ))}
@@ -1631,7 +1811,13 @@ export default function App() {
           >
             {resolvedSectionOpen ? (
               <div style={{ display: "grid", gap: 8 }}>
-              {resolvedFiltered.slice(0, 5).map((incident) => (
+                <input
+                  value={resolvedSearch}
+                  onChange={(event) => setResolvedSearch(event.target.value)}
+                  placeholder="Search resolved incidents, owners or keywords"
+                  style={InputBaseStyle(false)}
+                />
+              {resolvedFiltered.slice(0, 10).map((incident) => (
                 <div
                   key={incident.id}
                   style={{
@@ -1652,7 +1838,20 @@ export default function App() {
                       {formatDateTime(incident.resolved_at || incident.updated_at)}
                     </div>
                   </div>
-                  <Pill tone="green">Resolved</Pill>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <Pill tone="green">Resolved</Pill>
+                    <SmallActionButton
+                      onClick={async () => {
+                        await selectIncident(incident.id);
+                        setCurrentView("workspace");
+                      }}
+                    >
+                      Review
+                    </SmallActionButton>
+                    <SmallActionButton onClick={() => archiveIncident(incident.id)}>
+                      Archive
+                    </SmallActionButton>
+                  </div>
                 </div>
               ))}
 
@@ -1665,6 +1864,85 @@ export default function App() {
             ) : (
               <div style={{ fontSize: 12, color: THEME.subtleText }}>
                 Resolved Incidents is collapsed. Expand to review completed work.
+              </div>
+            )}
+          </Card>
+
+          <Card
+            title={`Archived Incidents (${archivedFiltered.length})`}
+            right={
+              <SmallActionButton onClick={() => setArchiveSectionOpen((current) => !current)}>
+                {archiveSectionOpen ? "Collapse" : "Expand"}
+              </SmallActionButton>
+            }
+          >
+            {archiveSectionOpen ? (
+              <div style={{ display: "grid", gap: 8 }}>
+                <div style={{ fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                  Historical incidents remain searchable and reviewable without crowding the day-to-day operational queue.
+                </div>
+                <input
+                  value={archiveSearch}
+                  onChange={(event) => setArchiveSearch(event.target.value)}
+                  placeholder="Search archived incidents"
+                  style={InputBaseStyle(false)}
+                />
+
+                {archivedFiltered.slice(0, 25).map((incident) => {
+                  const manuallyArchived = archivedIds.includes(incident.id);
+                  return (
+                    <div
+                      key={incident.id}
+                      style={{
+                        padding: 10,
+                        borderRadius: 12,
+                        border: `1px solid ${THEME.subtleBorder}`,
+                        background: "#F8FAFC",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 850 }}>{incident.title}</div>
+                        <div style={{ marginTop: 4, fontSize: 12, color: THEME.subtleText }}>
+                          Resolved by {incident.resolved_by || "Unassigned"} • {formatDateTime(incident.resolved_at || incident.updated_at)}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                        <Pill>{manuallyArchived ? "Archived" : "Historical"}</Pill>
+                        <SmallActionButton
+                          onClick={async () => {
+                            await selectIncident(incident.id);
+                            setCurrentView("workspace");
+                          }}
+                        >
+                          Review
+                        </SmallActionButton>
+                        {manuallyArchived && incidentWithinDays(incident, 90) ? (
+                          <SmallActionButton onClick={() => restoreArchivedIncident(incident.id)}>
+                            Restore
+                          </SmallActionButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {!archivedFiltered.length ? (
+                  <div style={{ fontSize: 12, color: THEME.subtleText }}>
+                    No archived incidents match the current search.
+                  </div>
+                ) : null}
+
+                <div style={{ fontSize: 11, color: THEME.subtleText }}>
+                  V1 demo note: explicit archive choices and saved AI assessments are retained locally in this browser; incident records remain sourced from the API.
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: THEME.subtleText }}>
+                Archived Incidents is collapsed. Expand to search historical operational records.
               </div>
             )}
           </Card>
@@ -1722,6 +2000,41 @@ export default function App() {
           </div>
         </div>
 
+        <div
+          style={{
+            position: "sticky",
+            top: 8,
+            zIndex: 20,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: 8,
+            borderRadius: 12,
+            border: `1px solid ${THEME.cardBorder}`,
+            background: "rgba(245,248,252,0.96)",
+            boxShadow: "0 4px 14px rgba(15,23,42,0.06)",
+          }}
+        >
+          {[
+            ["investigation", "Investigation"],
+            ["ai", "AI Assessment"],
+            ["coordination", "Coordination"],
+            ["resolution", "Resolution"],
+            ["activity", "Activity"],
+          ].map(([key, label]) => (
+            <Button
+              key={key}
+              onClick={() => {
+                setWorkspaceSection(key);
+                if (key === "activity" && selectedId) loadTimeline(selectedId);
+              }}
+              variant={workspaceSection === key ? "primary" : "default"}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+
         {err ? (
           <div
             style={{
@@ -1739,7 +2052,44 @@ export default function App() {
         ) : null}
 
         {selectedIncident ? (
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 14,
+              border: `1px solid ${THEME.cardBorder}`,
+              background: "#FFFFFF",
+              boxShadow: THEME.shadow,
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                Selected Incident
+              </div>
+              <div style={{ marginTop: 3, fontSize: 16, fontWeight: 900, color: THEME.heading }}>
+                {selectedIncident.title}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <Pill>{selectedIncident.priority}</Pill>
+              <Pill>{selectedIncident.status}</Pill>
+              {selectedIncident.owner_team ? (
+                <Pill tone="green">Owner: {selectedIncident.owner_team}{selectedIncident.owner_name ? ` — ${selectedIncident.owner_name}` : ""}</Pill>
+              ) : (
+                <Pill tone="amber">Owner not assigned</Pill>
+              )}
+              {selectedReadOnly ? <Pill tone="green">Read-only record</Pill> : null}
+            </div>
+          </div>
+        ) : null}
+
+        {selectedIncident ? (
           <>
+            <div style={{ display: workspaceSection === "investigation" ? "block" : "none" }}>
             <Card
               title="Incident Investigation"
               right={
@@ -1751,6 +2101,7 @@ export default function App() {
                   ) : (
                     <Pill tone="amber">Owner not assigned</Pill>
                   )}
+                  {selectedReadOnly ? <Pill tone="green">Read-only record</Pill> : null}
                 </div>
               }
             >
@@ -1865,7 +2216,7 @@ export default function App() {
                           color: "#1E3A8A",
                         }}
                       >
-                        <div style={{ fontWeight: 900 }}>⚠</div>
+                        <div style={{ fontWeight: 900, color: signalColorForTone(operationalAttentionFor(selectedIncident).tone) }}>⚠</div>
                         <div>{signal}</div>
                       </div>
                     ))}
@@ -1887,10 +2238,12 @@ export default function App() {
                 </div>
               </div>
             </Card>
+            </div>
 
-            <div style={SectionGrid("0.82fr 1.18fr")}>
+            <div style={{ display: workspaceSection === "investigation" || workspaceSection === "ai" ? "grid" : "none", gridTemplateColumns: "1fr", gap: 10, alignItems: "start" }}>
+          <div style={{ display: workspaceSection === "investigation" ? "block" : "none" }}>
           <Card
-            title="Update incident"
+            title={selectedReadOnly ? "Resolved incident record" : "Update incident"}
             right={
               <div style={{ display: "flex", gap: 8 }}>
                 <SmallActionButton
@@ -1900,15 +2253,20 @@ export default function App() {
                   Refresh
                 </SmallActionButton>
                 <SmallActionButton
-                  onClick={() => setTimelineCollapsed((current) => !current)}
+                  onClick={openActivitySection}
                   disabled={!selectedId}
                 >
-                  {timelineCollapsed ? "View Activity" : "Hide Activity"}
+                  View Activity
                 </SmallActionButton>
               </div>
             }
           >
             <div style={{ display: "grid", gap: 10 }}>
+              {selectedReadOnly ? (
+                <div style={{ padding: 10, borderRadius: 10, background: "#F0FDF4", border: "1px solid #A7F3D0", color: "#166534", fontSize: 12, fontWeight: 800 }}>
+                  ✓ Read-only resolved incident. Historical evidence, AI assessment and Activity History remain available for review.
+                </div>
+              ) : null}
               {selectedIncident ? (
                 <div
                   style={{
@@ -1962,7 +2320,7 @@ export default function App() {
                     value={uStatus}
                     onChange={setUStatus}
                     options={selectedIncident ? allowedStatusesForSelected : STATUSES}
-                    disabled={!selectedIncident}
+                    disabled={!selectedIncident || selectedReadOnly}
                   />
                   {selectedIncident && allowedStatusesForSelected.length <= 1 ? (
                     <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 6 }}>
@@ -1977,7 +2335,7 @@ export default function App() {
                     value={uPriority || "P2"}
                     onChange={setUPriority}
                     options={PRIORITIES}
-                    disabled={!selectedIncident}
+                    disabled={!selectedIncident || selectedReadOnly}
                   />
                   <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 6 }}>
                     Priority can be adjusted at any stage and is recorded in Activity History.
@@ -1992,8 +2350,8 @@ export default function App() {
                   onChange={(event) => setUNote(event.target.value)}
                   placeholder="Add an operational note (optional)"
                   rows={2}
-                  disabled={!selectedIncident}
-                  style={{ ...InputBaseStyle(!selectedIncident), resize: "vertical" }}
+                  disabled={!selectedIncident || selectedReadOnly}
+                  style={{ ...InputBaseStyle(!selectedIncident || selectedReadOnly), resize: "vertical" }}
                 />
               </div>
 
@@ -2001,7 +2359,7 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
                     <Label>Resolved by (required)</Label>
-                    <Select value={uResolvedBy} onChange={setUResolvedBy} options={ROLES} />
+                    <Select value={uResolvedBy} onChange={setUResolvedBy} options={ROLES} disabled={selectedReadOnly} />
                   </div>
                   <div>
                     <Label>Resolution notes (required)</Label>
@@ -2009,7 +2367,8 @@ export default function App() {
                       value={uNotes}
                       onChange={(event) => setUNotes(event.target.value)}
                       placeholder="Short summary of the resolution and follow-up actions"
-                      style={InputBaseStyle(false)}
+                      disabled={selectedReadOnly}
+                      style={InputBaseStyle(selectedReadOnly)}
                     />
                   </div>
                 </div>
@@ -2018,7 +2377,7 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <Button
                   onClick={updateIncident}
-                  disabled={updating || deleting || !selectedId || invalidResolve}
+                  disabled={updating || deleting || !selectedId || invalidResolve || selectedReadOnly}
                   variant="default"
                 >
                   {updating ? "Updating…" : "Update incident"}
@@ -2026,7 +2385,7 @@ export default function App() {
 
                 <DangerButton
                   onClick={() => setConfirmDelete(true)}
-                  disabled={!selectedIncident || updating || deleting}
+                  disabled={!selectedIncident || updating || deleting || selectedReadOnly}
                 >
                   Delete incident
                 </DangerButton>
@@ -2088,7 +2447,7 @@ export default function App() {
                   ✓ Incident updated successfully.
                   <button
                     type="button"
-                    onClick={() => setTimelineCollapsed(false)}
+                    onClick={openActivitySection}
                     style={{
                       display: "block",
                       marginTop: 7,
@@ -2111,102 +2470,11 @@ export default function App() {
                 </div>
               ) : null}
 
-              {!timelineCollapsed ? (
-                <div style={{ marginTop: 6 }}>
-                  <div style={{ fontWeight: 900 }}>Activity History</div>
-
-                  {timelineLoading ? (
-                    <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 6 }}>
-                      Loading activity…
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        display: "grid",
-                        gap: 6,
-                        maxHeight: TIMELINE_MAX_HEIGHT,
-                        overflow: "auto",
-                        paddingRight: 4,
-                      }}
-                    >
-                      {(timeline || []).slice(0, 50).map((event) => {
-                        const allocation = parseTimelineAllocation(event);
-
-                        return (
-                        <div
-                          key={event.id}
-                          style={{
-                            padding: "8px 10px",
-                            borderRadius: 12,
-                            border: `1px solid ${THEME.subtleBorder}`,
-                            background: "#F8FAFC",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                            <div style={{ fontWeight: 900, fontSize: 13 }}>{event.event_type}</div>
-                            <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                              {formatDateTime(event.created_at)}
-                            </div>
-                          </div>
-
-                          {allocation ? (
-                            <div
-                              style={{
-                                marginTop: 7,
-                                display: "grid",
-                                gap: 4,
-                                fontSize: 12,
-                                color: THEME.text,
-                              }}
-                            >
-                              <div>
-                                Owner: <b>{allocation.owner_team}</b>
-                                {allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
-                              </div>
-                              <div>
-                                Allocated by: <b>{allocation.allocated_by}</b>
-                              </div>
-                              <div>{allocation.decision}</div>
-                              <div style={{ color: THEME.subtleText }}>{allocation.reason}</div>
-                            </div>
-                          ) : null}
-
-                          {!allocation && (event.old_value || event.new_value) ? (
-                            <div style={{ marginTop: 4, fontSize: 12, color: THEME.subtleText }}>
-                              {event.old_value ? (
-                                <span>
-                                  from <b style={{ color: THEME.text }}>{event.old_value}</b>{" "}
-                                </span>
-                              ) : null}
-                              {event.new_value ? (
-                                <span>
-                                  to <b style={{ color: THEME.text }}>{event.new_value}</b>
-                                </span>
-                              ) : null}
-                            </div>
-                          ) : null}
-
-                          {event.note || event.message ? (
-                            <div style={{ marginTop: 6, fontSize: 12, color: THEME.text, whiteSpace: "pre-wrap" }}>
-                              {event.note || event.message}
-                            </div>
-                          ) : null}
-                        </div>
-                        );
-                      })}
-
-                      {!timeline.length ? (
-                        <div style={{ fontSize: 12, color: THEME.subtleText }}>No activity has been recorded yet.</div>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              ) : null}
             </div>
           </Card>
+          </div>
 
-
+          <div style={{ display: workspaceSection === "ai" ? "block" : "none" }}>
           <Card
             title="AI Operations Assistant"
             right={<Pill tone="green">Decision support</Pill>}
@@ -2266,7 +2534,11 @@ export default function App() {
                 disabled={!selectedIncident || aiLoading}
                 variant="primary"
               >
-                {aiLoading ? "AI Assistant is reviewing…" : "Generate AI Operational Assessment"}
+                {aiLoading
+                  ? "AI Assistant is reviewing…"
+                  : aiResult?.summary
+                    ? "Regenerate AI Operational Assessment"
+                    : "Generate AI Operational Assessment"}
               </Button>
 
               {aiError ? (
@@ -2590,309 +2862,6 @@ export default function App() {
 
                   <div
                     style={{
-                      padding: 16,
-                      borderRadius: 14,
-                      border: "2px solid #2563EB",
-                      background: "#F8FBFF",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                      <div>
-                        <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                          Operational Coordination
-                        </div>
-                        <div style={{ marginTop: 4, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
-                          Turn the assessment into coordinated action
-                        </div>
-                      </div>
-                      <Pill tone="green">Human approval required</Pill>
-                    </div>
-
-                    <div style={{ marginTop: 14, padding: 14, borderRadius: 12, border: "1px solid #BFDBFE", background: "#EFF6FF" }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: "#1E3A8A", textTransform: "uppercase" }}>AI Recommendation</div>
-                      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "start" }}>
-                        <div>
-                          <div style={{ fontSize: 20, fontWeight: 900, color: THEME.heading }}>
-                            {aiResult.summary.recommended_incident_owner?.owner || "No recommendation"}
-                          </div>
-                          <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6, color: THEME.text }}>
-                            {aiResult.summary.recommended_incident_owner?.reason || "No owner recommendation rationale was returned."}
-                          </div>
-                        </div>
-                        <Pill
-                          tone={
-                            String(aiResult.summary.recommended_incident_owner?.recommendation_reliability || "").toLowerCase() === "strong"
-                              ? "green"
-                              : String(aiResult.summary.recommended_incident_owner?.recommendation_reliability || "").toLowerCase() === "moderate"
-                                ? "amber"
-                                : "red"
-                          }
-                        >
-                          {aiResult.summary.recommended_incident_owner?.recommendation_reliability || "Limited"} confidence
-                        </Pill>
-                      </div>
-
-                      {!selectedIncident?.owner_team ? (
-                        <div style={{ marginTop: 12, display: "grid", gap: 9 }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
-                            <Button
-                              onClick={() => allocateIncident(true)}
-                              disabled={allocating || !aiResult.summary.recommended_incident_owner?.owner}
-                              variant="primary"
-                            >
-                              {allocating ? "Assigning…" : "✓ Accept Recommendation"}
-                            </Button>
-                            <Button
-                              onClick={() => {
-                                setChooseDifferentOwner((current) => !current);
-                                setAllocationError("");
-                              }}
-                              disabled={allocating}
-                            >
-                              Assign Manually
-                            </Button>
-                          </div>
-
-                          {chooseDifferentOwner ? (
-                            <div style={{ padding: 12, borderRadius: 12, background: "#FFFFFF", border: `1px solid ${THEME.subtleBorder}`, display: "grid", gap: 9 }}>
-                              <div>
-                                <Label>Owner Team</Label>
-                                <Select value={allocationTeam} onChange={setAllocationTeam} options={ROLES} />
-                              </div>
-                              <div>
-                                <Label>Owner Name (optional)</Label>
-                                <input value={allocationName} onChange={(event) => setAllocationName(event.target.value)} placeholder="e.g. Sarah Jones" style={InputBaseStyle(false)} />
-                              </div>
-                              <Button onClick={() => allocateIncident(false)} disabled={allocating} variant="primary">
-                                {allocating ? "Assigning…" : `Assign to ${allocationTeam}`}
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-
-                      {allocationError ? (
-                        <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 13 }}>
-                          {allocationError}
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "0.9fr 1.1fr", gap: 10 }}>
-                      <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>Assigned Owner</div>
-                        {selectedIncident?.owner_team ? (
-                          <>
-                            <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
-                              {selectedIncident.owner_team}{selectedIncident.owner_name ? ` — ${selectedIncident.owner_name}` : ""}
-                            </div>
-                            <div style={{ marginTop: 8 }}><Pill tone="green">✓ Owner assigned</Pill></div>
-                            <div style={{ marginTop: 8, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
-                              Assigned {formatDateTime(selectedIncident.owner_assigned_at)} by {selectedIncident.owner_assigned_by || "Operations Manager"}.
-                            </div>
-                          </>
-                        ) : (
-                          <div style={{ marginTop: 8, fontSize: 13, color: THEME.subtleText }}>
-                            No owner has been assigned. Operations must approve or override the AI recommendation.
-                          </div>
-                        )}
-
-                        {allocationSuccess ? (
-                          <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>
-                            ✓ {allocationSuccess}
-                          </div>
-                        ) : null}
-
-                        <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${THEME.subtleBorder}` }}>
-                          <Label>Current Status</Label>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                            <Pill tone={selectedIncident.status === "investigating" ? "amber" : "neutral"}>{selectedIncident.status}</Pill>
-                            {selectedIncident.status === "investigating" ? (
-                              <span style={{ fontSize: 12, color: THEME.subtleText }}>Response is actively being coordinated.</span>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>Notify Stakeholders</div>
-                        <div style={{ marginTop: 5, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
-                          Record who has been informed so the wider business can respond appropriately.
-                        </div>
-                        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                          {Object.keys(stakeholderNotifications).map((stakeholder) => (
-                            <label key={stakeholder} style={{ display: "flex", gap: 9, alignItems: "center", padding: "8px 10px", borderRadius: 10, border: `1px solid ${THEME.subtleBorder}`, background: stakeholderNotifications[stakeholder] ? "#F0FDF4" : "#F8FAFC", cursor: "pointer", fontSize: 13, fontWeight: 750 }}>
-                              <input
-                                type="checkbox"
-                                checked={stakeholderNotifications[stakeholder]}
-                                onChange={(event) => setStakeholderNotifications((current) => ({ ...current, [stakeholder]: event.target.checked }))}
-                              />
-                              <span>{stakeholderNotifications[stakeholder] ? "✓ " : ""}{stakeholder}</span>
-                            </label>
-                          ))}
-                        </div>
-                        <div style={{ marginTop: 10 }}>
-                          <Button
-                            onClick={notifyStakeholders}
-                            disabled={notifyingStakeholders || !selectedIncident?.owner_team || selectedIncident?.status === "resolved"}
-                            variant="primary"
-                          >
-                            {notifyingStakeholders ? "Recording notifications…" : "Notify Selected Stakeholders"}
-                          </Button>
-                        </div>
-                        {!selectedIncident?.owner_team ? (
-                          <div style={{ marginTop: 7, fontSize: 12, color: THEME.subtleText }}>Assign an incident owner before recording stakeholder notifications.</div>
-                        ) : null}
-                        {notificationSuccess ? (
-                          <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>✓ {notificationSuccess}</div>
-                        ) : null}
-                        {notificationError ? (
-                          <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>{notificationError}</div>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
-                      AI recommends. Operations approves or overrides. Ownership and stakeholder communication are recorded for accountability.
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      padding: 16,
-                      borderRadius: 14,
-                      border: selectedIncident?.status === "resolved" ? "2px solid #22C55E" : "2px solid #0F766E",
-                      background: selectedIncident?.status === "resolved" ? "#F0FDF4" : "#F0FDFA",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                      <div>
-                        <div style={{ fontSize: 12, color: selectedIncident?.status === "resolved" ? "#166534" : "#0F766E", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                          Resolution & Close
-                        </div>
-                        <div style={{ marginTop: 4, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
-                          Close the operational loop
-                        </div>
-                      </div>
-                      <Pill tone={selectedIncident?.status === "resolved" ? "green" : "amber"}>
-                        {selectedIncident?.status === "resolved" ? "✓ Incident closed" : "Operations approval required"}
-                      </Pill>
-                    </div>
-
-                    {selectedIncident?.status === "resolved" ? (
-                      <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                        <div style={{ padding: 14, borderRadius: 12, border: "1px solid #A7F3D0", background: "#FFFFFF" }}>
-                          <div style={{ fontWeight: 900, color: "#166534" }}>✓ Operational lifecycle complete</div>
-                          <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6, color: THEME.text }}>
-                            The incident is resolved, removed from the active operational queue and retained in Resolved Incidents for reporting and review.
-                          </div>
-                          <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                            <div>
-                              <Label>Resolved by</Label>
-                              <div style={{ fontSize: 13, fontWeight: 800 }}>
-                                {selectedIncident.resolved_by || closureOwner || "Operations"}
-                              </div>
-                            </div>
-                            <div>
-                              <Label>Resolution</Label>
-                              <div style={{ fontSize: 13, fontWeight: 800 }}>
-                                {selectedIncident.resolution_notes || closureNotes || "Resolution recorded"}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {closureSuccess ? (
-                          <div style={{ padding: 11, borderRadius: 10, background: "#DCFCE7", border: "1px solid #86EFAC", color: "#166534", fontSize: 12, fontWeight: 800 }}>
-                            ✓ {closureSuccess}
-                          </div>
-                        ) : null}
-
-                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                          <Button
-                            onClick={() => {
-                              setCurrentView("dashboard");
-                              loadAll();
-                            }}
-                            variant="primary"
-                          >
-                            ← Return to Active Incidents
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
-                        <div style={{ padding: 12, borderRadius: 12, border: "1px solid #99F6E4", background: "#FFFFFF", fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
-                          Operations verifies that the response is complete, records the resolution and closes the incident. Closure returns the issue to the wider business as a completed operational outcome.
-                        </div>
-
-                        <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 10 }}>
-                          <div>
-                            <Label>Resolved by</Label>
-                            <Select value={closureOwner} onChange={setClosureOwner} options={ROLES} disabled={closingIncident} />
-                          </div>
-                          <div>
-                            <Label>Resolution summary (required)</Label>
-                            <textarea
-                              value={closureNotes}
-                              onChange={(event) => {
-                                setClosureNotes(event.target.value);
-                                if (closureError) setClosureError("");
-                              }}
-                              placeholder="What was fixed, what changed, and any follow-up required?"
-                              rows={3}
-                              disabled={closingIncident}
-                              style={{ ...InputBaseStyle(closingIncident), resize: "vertical" }}
-                            />
-                          </div>
-                        </div>
-
-                        <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
-                          <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
-                            Close the communication loop
-                          </div>
-                          <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
-                            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
-                              <input type="checkbox" checked={closureNotifyReporter} onChange={(event) => setClosureNotifyReporter(event.target.checked)} disabled={closingIncident} />
-                              Notify reporter: incident resolved
-                            </label>
-                            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
-                              <input type="checkbox" checked={closureNotifyStakeholders} onChange={(event) => setClosureNotifyStakeholders(event.target.checked)} disabled={closingIncident} />
-                              Notify coordinated stakeholders
-                            </label>
-                          </div>
-                        </div>
-
-                        {!selectedIncident?.owner_team ? (
-                          <div style={{ padding: 10, borderRadius: 10, background: "#FFFBEB", border: "1px solid #FCD34D", color: "#92400E", fontSize: 12, fontWeight: 700 }}>
-                            Assign an incident owner before closing the incident.
-                          </div>
-                        ) : null}
-
-                        {closureError ? (
-                          <div style={{ padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>
-                            {closureError}
-                          </div>
-                        ) : null}
-
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
-                          <div style={{ fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
-                            Closing the incident records the resolution, updates the Activity History and moves it from Active Incidents to Resolved Incidents.
-                          </div>
-                          <Button
-                            onClick={closeOperationalLifecycle}
-                            disabled={closingIncident || !selectedIncident?.owner_team || !closureNotes.trim()}
-                            variant="primary"
-                          >
-                            {closingIncident ? "Closing Incident…" : "✓ Close Incident"}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div
-                    style={{
                       padding: 14,
                       borderRadius: 14,
                       border: `1px solid ${THEME.subtleBorder}`,
@@ -2958,9 +2927,440 @@ export default function App() {
                 <div style={{ marginTop: 4, fontSize: 13, fontWeight: 900 }}>
                   Operational decisions remain the responsibility of authorised personnel.
                 </div>
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #BFDBFE", fontSize: 11, fontWeight: 700, color: "#475569" }}>
+                  {tokenUsageFor(aiResult)
+                    ? `AI usage · ${tokenUsageFor(aiResult).total != null ? `${tokenUsageFor(aiResult).total.toLocaleString()} tokens` : "token total unavailable"}${tokenUsageFor(aiResult).input != null ? ` · ${tokenUsageFor(aiResult).input.toLocaleString()} input` : ""}${tokenUsageFor(aiResult).output != null ? ` · ${tokenUsageFor(aiResult).output.toLocaleString()} output` : ""}`
+                    : "AI usage · Token usage is not returned by the current API response."}
+                </div>
               </div>
             </div>
           </Card>
+          </div>
+            </div>
+
+            <div
+              style={{
+                display: workspaceSection === "coordination" ? "block" : "none",
+                padding: 16,
+                borderRadius: 16,
+                border: "2px solid #2563EB",
+                background: "#F8FBFF",
+                boxShadow: THEME.shadow,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: "#2563EB", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Operational Coordination
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 20, fontWeight: 900, color: THEME.heading }}>
+                    Coordinate the response with or without AI
+                  </div>
+                </div>
+                <Pill tone="green">Operations remains accountable</Pill>
+              </div>
+
+              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "0.95fr 1.05fr", gap: 12 }}>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ padding: 14, borderRadius: 12, border: "1px solid #BFDBFE", background: "#EFF6FF" }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#1E3A8A", textTransform: "uppercase" }}>
+                      AI Recommendation — Optional
+                    </div>
+
+                    {aiResult?.summary?.recommended_incident_owner?.owner ? (
+                      <>
+                        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "start" }}>
+                          <div>
+                            <div style={{ fontSize: 20, fontWeight: 900, color: THEME.heading }}>
+                              {aiResult.summary.recommended_incident_owner.owner}
+                            </div>
+                            <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6, color: THEME.text }}>
+                              {aiResult.summary.recommended_incident_owner.reason || "No owner recommendation rationale was returned."}
+                            </div>
+                          </div>
+                          <Pill
+                            tone={
+                              String(aiResult.summary.recommended_incident_owner?.recommendation_reliability || "").toLowerCase() === "strong"
+                                ? "green"
+                                : String(aiResult.summary.recommended_incident_owner?.recommendation_reliability || "").toLowerCase() === "moderate"
+                                  ? "amber"
+                                  : "red"
+                            }
+                          >
+                            {aiResult.summary.recommended_incident_owner?.recommendation_reliability || "Limited"} confidence
+                          </Pill>
+                        </div>
+
+                        {!selectedIncident?.owner_team ? (
+                          <div style={{ marginTop: 12 }}>
+                            <Button
+                              onClick={() => allocateIncident(true)}
+                              disabled={allocating}
+                              variant="primary"
+                            >
+                              {allocating ? "Assigning…" : "✓ Accept AI Recommendation"}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
+                        No AI owner recommendation has been generated. Operations can assign an owner manually now, or use the AI assessment as optional decision support.
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
+                      Incident Owner
+                    </div>
+
+                    {selectedIncident?.owner_team ? (
+                      <>
+                        <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
+                          {selectedIncident.owner_team}{selectedIncident.owner_name ? ` — ${selectedIncident.owner_name}` : ""}
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          <Pill tone="green">✓ Owner assigned</Pill>
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                          Assigned {formatDateTime(selectedIncident.owner_assigned_at)} by {selectedIncident.owner_assigned_by || "Operations Manager"}.
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ marginTop: 10, display: "grid", gap: 9 }}>
+                        <div>
+                          <Label>Owner Team</Label>
+                          <Select value={allocationTeam} onChange={setAllocationTeam} options={ROLES} />
+                        </div>
+                        <div>
+                          <Label>Owner Name (optional)</Label>
+                          <input
+                            value={allocationName}
+                            onChange={(event) => setAllocationName(event.target.value)}
+                            placeholder="e.g. Dave Smith"
+                            style={InputBaseStyle(false)}
+                          />
+                        </div>
+                        <Button
+                          onClick={() => allocateIncident(false)}
+                          disabled={allocating}
+                          variant="primary"
+                        >
+                          {allocating ? "Assigning…" : `Assign ${allocationTeam}`}
+                        </Button>
+                      </div>
+                    )}
+
+                    {allocationSuccess ? (
+                      <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>
+                        ✓ {allocationSuccess}
+                      </div>
+                    ) : null}
+
+                    {allocationError ? (
+                      <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 13 }}>
+                        {allocationError}
+                      </div>
+                    ) : null}
+
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${THEME.subtleBorder}` }}>
+                      <Label>Current Status</Label>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                        <Pill tone={selectedIncident.status === "investigating" ? "amber" : "neutral"}>{selectedIncident.status}</Pill>
+                        {selectedIncident.status === "investigating" ? (
+                          <span style={{ fontSize: 12, color: THEME.subtleText }}>Response is actively being coordinated.</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
+                    Stakeholder Communications
+                  </div>
+                  <div style={{ marginTop: 5, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
+                    Record who needs visibility. This is separate from incident ownership and can include any affected business area.
+                  </div>
+
+                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {Object.keys(stakeholderNotifications).map((stakeholder) => (
+                      <label
+                        key={stakeholder}
+                        style={{
+                          display: "flex",
+                          gap: 9,
+                          alignItems: "center",
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: `1px solid ${THEME.subtleBorder}`,
+                          background: stakeholderNotifications[stakeholder] ? "#F0FDF4" : "#F8FAFC",
+                          cursor: selectedReadOnly ? "not-allowed" : "pointer",
+                          fontSize: 13,
+                          fontWeight: 750,
+                          opacity: selectedReadOnly ? 0.75 : 1,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={stakeholderNotifications[stakeholder]}
+                          disabled={selectedReadOnly}
+                          onChange={(event) =>
+                            setStakeholderNotifications((current) => ({
+                              ...current,
+                              [stakeholder]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>{stakeholderNotifications[stakeholder] ? "✓ " : ""}{stakeholder}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <Button
+                      onClick={notifyStakeholders}
+                      disabled={notifyingStakeholders || !selectedIncident?.owner_team || selectedIncident?.status === "resolved"}
+                      variant="primary"
+                    >
+                      {notifyingStakeholders ? "Recording communications…" : "Record Stakeholder Notifications"}
+                    </Button>
+                  </div>
+
+                  {!selectedIncident?.owner_team ? (
+                    <div style={{ marginTop: 7, fontSize: 12, color: THEME.subtleText }}>
+                      Assign an incident owner before recording stakeholder notifications.
+                    </div>
+                  ) : null}
+
+                  {notificationSuccess ? (
+                    <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>
+                      ✓ {notificationSuccess}
+                    </div>
+                  ) : null}
+
+                  {notificationError ? (
+                    <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>
+                      {notificationError}
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: 14, paddingTop: 10, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 12, color: THEME.subtleText, lineHeight: 1.55 }}>
+                    V1 records ownership, status changes, stakeholder notifications and operational notes in Activity History. Rich contributor work logs and evidence attachments remain a V2 enhancement.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: workspaceSection === "resolution" ? "block" : "none",
+                padding: 16,
+                borderRadius: 16,
+                border: selectedIncident?.status === "resolved" ? "2px solid #22C55E" : "2px solid #0F766E",
+                background: selectedIncident?.status === "resolved" ? "#F0FDF4" : "#F0FDFA",
+                boxShadow: THEME.shadow,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, color: selectedIncident?.status === "resolved" ? "#166534" : "#0F766E", fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Resolution & Close
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 20, fontWeight: 900, color: THEME.heading }}>
+                    Close the operational loop
+                  </div>
+                </div>
+                <Pill tone={selectedIncident?.status === "resolved" ? "green" : "amber"}>
+                  {selectedIncident?.status === "resolved" ? "✓ Incident closed" : "Operations approval required"}
+                </Pill>
+              </div>
+
+              {selectedIncident?.status === "resolved" ? (
+                <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                  <div style={{ padding: 14, borderRadius: 12, border: "1px solid #A7F3D0", background: "#FFFFFF" }}>
+                    <div style={{ fontWeight: 900, color: "#166534" }}>✓ Operational lifecycle complete</div>
+                    <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.6, color: THEME.text }}>
+                      The incident is resolved, removed from the active operational queue and retained in Resolved Incidents for reporting and future reference.
+                    </div>
+                    <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div>
+                        <Label>Resolved by</Label>
+                        <div style={{ fontSize: 13, fontWeight: 800 }}>
+                          {selectedIncident.resolved_by || closureOwner || "Operations"}
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Resolution</Label>
+                        <div style={{ fontSize: 13, fontWeight: 800 }}>
+                          {selectedIncident.resolution_notes || closureNotes || "Resolution recorded"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {closureSuccess ? (
+                    <div style={{ padding: 11, borderRadius: 10, background: "#DCFCE7", border: "1px solid #86EFAC", color: "#166534", fontSize: 12, fontWeight: 800 }}>
+                      ✓ {closureSuccess}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <Button
+                      onClick={() => {
+                        setCurrentView("dashboard");
+                        loadAll();
+                      }}
+                      variant="primary"
+                    >
+                      ← Return to Active Incidents
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+                  <div style={{ padding: 12, borderRadius: 12, border: "1px solid #99F6E4", background: "#FFFFFF", fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
+                    Operations verifies that the response is complete, records what resolved the issue and closes the incident. For V1, Operations may record the resolution on behalf of the contributing stakeholder so the operational record remains searchable later.
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 10 }}>
+                    <div>
+                      <Label>Resolved by</Label>
+                      <Select value={closureOwner} onChange={setClosureOwner} options={ROLES} disabled={closingIncident} />
+                    </div>
+                    <div>
+                      <Label>Resolution summary (required)</Label>
+                      <textarea
+                        value={closureNotes}
+                        onChange={(event) => {
+                          setClosureNotes(event.target.value);
+                          if (closureError) setClosureError("");
+                        }}
+                        placeholder="What was done, who completed the work, what changed, and any follow-up required?"
+                        rows={4}
+                        disabled={closingIncident}
+                        style={{ ...InputBaseStyle(closingIncident), resize: "vertical" }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
+                      Close the communication loop
+                    </div>
+                    <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
+                        <input type="checkbox" checked={closureNotifyReporter} onChange={(event) => setClosureNotifyReporter(event.target.checked)} disabled={closingIncident} />
+                        Notify reporter: incident resolved
+                      </label>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, fontWeight: 700 }}>
+                        <input type="checkbox" checked={closureNotifyStakeholders} onChange={(event) => setClosureNotifyStakeholders(event.target.checked)} disabled={closingIncident} />
+                        Notify coordinated stakeholders
+                      </label>
+                    </div>
+                  </div>
+
+                  {!selectedIncident?.owner_team ? (
+                    <div style={{ padding: 10, borderRadius: 10, background: "#FFFBEB", border: "1px solid #FCD34D", color: "#92400E", fontSize: 12, fontWeight: 700 }}>
+                      Assign an incident owner in Operational Coordination before closing the incident.
+                    </div>
+                  ) : null}
+
+                  {closureError ? (
+                    <div style={{ padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>
+                      {closureError}
+                    </div>
+                  ) : null}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
+                    <div style={{ fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                      Closing records the resolution, updates Activity History and moves the incident from Active Incidents to Resolved Incidents.
+                    </div>
+                    <Button
+                      onClick={closeOperationalLifecycle}
+                      disabled={closingIncident || !selectedIncident?.owner_team || !closureNotes.trim()}
+                      variant="primary"
+                    >
+                      {closingIncident ? "Closing Incident…" : "✓ Close Incident"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: workspaceSection === "activity" ? "block" : "none" }}>
+              <Card
+                title="Activity History"
+                right={
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <Pill>{timeline.length} events</Pill>
+                    <SmallActionButton onClick={() => selectedId && loadTimeline(selectedId)} disabled={timelineLoading}>
+                      {timelineLoading ? "Refreshing…" : "Refresh Activity"}
+                    </SmallActionButton>
+                  </div>
+                }
+              >
+                <div style={{ fontSize: 12, color: THEME.subtleText, marginBottom: 10, lineHeight: 1.5 }}>
+                  Full operational trace for this incident, including status and priority changes, ownership decisions, stakeholder communications and notes.
+                </div>
+
+                {timelineLoading ? (
+                  <div style={{ padding: 14, color: THEME.subtleText }}>Loading activity…</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {(timeline || []).slice(0, 100).map((event) => {
+                      const allocation = parseTimelineAllocation(event);
+                      return (
+                        <div
+                          key={event.id}
+                          style={{
+                            padding: 12,
+                            borderRadius: 12,
+                            border: `1px solid ${THEME.subtleBorder}`,
+                            background: "#F8FAFC",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                            <div style={{ fontWeight: 900, fontSize: 13 }}>{event.event_type}</div>
+                            <div style={{ fontSize: 12, color: THEME.subtleText }}>{formatDateTime(event.created_at)}</div>
+                          </div>
+
+                          {allocation ? (
+                            <div style={{ marginTop: 8, display: "grid", gap: 4, fontSize: 12, color: THEME.text }}>
+                              <div>
+                                Owner: <b>{allocation.owner_team}</b>{allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
+                              </div>
+                              <div>Allocated by: <b>{allocation.allocated_by}</b></div>
+                              <div>{allocation.decision}</div>
+                              <div style={{ color: THEME.subtleText }}>{allocation.reason}</div>
+                            </div>
+                          ) : null}
+
+                          {!allocation && (event.old_value || event.new_value) ? (
+                            <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>
+                              {event.old_value ? <span>from <b style={{ color: THEME.text }}>{event.old_value}</b> </span> : null}
+                              {event.new_value ? <span>to <b style={{ color: THEME.text }}>{event.new_value}</b></span> : null}
+                            </div>
+                          ) : null}
+
+                          {event.note || event.message ? (
+                            <div style={{ marginTop: 7, fontSize: 12, color: THEME.text, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                              {event.note || event.message}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+
+                    {!timeline.length ? (
+                      <div style={{ padding: 18, borderRadius: 12, border: "1px dashed #CBD5E1", background: "#F8FAFC", color: THEME.subtleText, textAlign: "center" }}>
+                        No activity has been recorded yet.
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </Card>
             </div>
           </>
         ) : (
