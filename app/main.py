@@ -1066,6 +1066,8 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
 
     resolved_count = len(rows)
     p0_resolved_count = 0
+    resolved_under_24h_count = 0
+    resolved_under_48h_count = 0
     mttrs: List[int] = []
     by_role: Dict[str, int] = {}
 
@@ -1076,7 +1078,12 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
         cdt = iso_to_dt(r["created_at"])
         rdt = iso_to_dt(r["resolved_at"]) if r["resolved_at"] else None
         if cdt and rdt and rdt >= cdt:
-            mttrs.append(minutes_between(cdt, rdt))
+            resolution_minutes = minutes_between(cdt, rdt)
+            mttrs.append(resolution_minutes)
+            if resolution_minutes < 24 * 60:
+                resolved_under_24h_count += 1
+            if resolution_minutes < 48 * 60:
+                resolved_under_48h_count += 1
 
         role = (r["resolved_by"] or "").strip() or "Unassigned"
         by_role[role] = by_role.get(role, 0) + 1
@@ -1094,6 +1101,8 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
         "window_days": days,
         "resolved_count": resolved_count,
         "p0_resolved_count": p0_resolved_count,
+        "resolved_under_24h_count": resolved_under_24h_count,
+        "resolved_under_48h_count": resolved_under_48h_count,
         "avg_mttr_minutes": avg_mttr,
         "top_resolvers": top_resolvers,
     }

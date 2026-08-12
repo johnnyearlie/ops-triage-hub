@@ -83,7 +83,7 @@ function inputStyle() {
 
 function BrandHeader({ onOpenDashboard }) {
   return (
-    <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, paddingBottom: 22, borderBottom: `1px solid ${THEME.subtleBorder}` }}>
+    <header className="oth-report-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, paddingBottom: 16, borderBottom: `1px solid ${THEME.subtleBorder}` }}>
       <div>
         <div style={{ fontSize: 26, lineHeight: 1.1, fontWeight: 900, color: THEME.heading, letterSpacing: "-0.02em" }}>
           Ops Triage Hub
@@ -203,11 +203,11 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", padding: "28px 18px 44px", background: THEME.pageBg, color: THEME.text }}>
-      <div style={{ maxWidth: 920, margin: "0 auto" }}>
+    <div className="oth-report-page" style={{ minHeight: "100vh", background: THEME.pageBg, color: THEME.text }}>
+      <div className="oth-report-container">
         <BrandHeader onOpenDashboard={onOpenDashboard} />
 
-        <main style={{ marginTop: 28 }}>
+        <main style={{ marginTop: 20 }}>
           {submitted ? (
             <section style={{ padding: 28, borderRadius: 18, border: `1px solid ${THEME.successBorder}`, background: THEME.successBg, boxShadow: THEME.shadow }}>
               <div style={{ width: 42, height: 42, borderRadius: "50%", display: "grid", placeItems: "center", background: "#D1FAE5", color: THEME.successText, fontSize: 22, fontWeight: 900 }}>
@@ -239,16 +239,16 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
             </section>
           ) : (
             <>
-              <section style={{ marginBottom: 22 }}>
+              <section style={{ marginBottom: 16 }}>
                 <div style={{ display: "inline-flex", padding: "5px 9px", borderRadius: 999, border: "1px solid #BFDBFE", background: "#EFF6FF", color: "#1D4ED8", fontSize: 12, fontWeight: 800 }}>
                   Internal reporting portal
                 </div>
 
-                <h1 style={{ margin: "14px 0 0", fontSize: 30, lineHeight: 1.15, color: THEME.heading, letterSpacing: "-0.02em" }}>
+                <h1 style={{ margin: "10px 0 0", fontSize: 30, lineHeight: 1.15, color: THEME.heading, letterSpacing: "-0.02em" }}>
                   Report Operational Issue
                 </h1>
 
-                <p style={{ margin: "10px 0 0", maxWidth: 720, lineHeight: 1.65, color: THEME.subtleText }}>
+                <p style={{ margin: "7px 0 0", maxWidth: 720, lineHeight: 1.65, color: THEME.subtleText }}>
                   Provide a clear account of what has happened. Operations will review the submission,
                   assess operational priority and coordinate the appropriate response.
                 </p>
@@ -256,10 +256,10 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
 
               <form onSubmit={submitIssue}>
                 <div style={{ border: `1px solid ${THEME.cardBorder}`, borderRadius: 18, background: THEME.cardBg, boxShadow: THEME.shadow, overflow: "hidden" }}>
-                  <section style={{ padding: 22 }}>
+                  <section style={{ padding: 18 }}>
                     <h2 style={{ margin: 0, fontSize: 18, color: THEME.heading }}>Reporter Information</h2>
 
-                    <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 14 }}>
+                    <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 14 }}>
                       <div>
                         <FieldLabel required>Full Name</FieldLabel>
                         <input value={reporterName} onChange={(event) => setReporterName(event.target.value)} placeholder="e.g. Sarah Jones" style={inputStyle()} />
@@ -281,10 +281,10 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
                     </div>
                   </section>
 
-                  <section style={{ padding: 22, borderTop: `1px solid ${THEME.subtleBorder}` }}>
+                  <section style={{ padding: 18, borderTop: `1px solid ${THEME.subtleBorder}` }}>
                     <h2 style={{ margin: 0, fontSize: 18, color: THEME.heading }}>Operational Issue</h2>
 
-                    <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
+                    <div style={{ marginTop: 12, display: "grid", gap: 11 }}>
                       <div>
                         <FieldLabel required>Issue Title</FieldLabel>
                         <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Retail payment card readers offline across 124 stores" style={inputStyle()} />
@@ -296,10 +296,10 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
                           value={description}
                           onChange={(event) => setDescription(event.target.value)}
                           placeholder="Describe what happened, when it started, who is affected and any known workarounds."
-                          rows={6}
+                          rows={4}
                           style={{ ...inputStyle(), resize: "vertical", lineHeight: 1.5 }}
                         />
-                        <div style={{ marginTop: 7, fontSize: 12, color: THEME.subtleText }}>
+                        <div style={{ marginTop: 5, fontSize: 12, color: THEME.subtleText }}>
                           Include what happened, when it started, which customers or teams are affected and whether any workaround is available.
                         </div>
                       </div>
@@ -313,21 +313,21 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
                     </div>
                   </section>
 
-                  <section style={{ padding: 22, borderTop: `1px solid ${THEME.subtleBorder}` }}>
+                  <section style={{ padding: 18, borderTop: `1px solid ${THEME.subtleBorder}` }}>
                     <h2 style={{ margin: 0, fontSize: 18, color: THEME.heading }}>Immediate Operations Attention</h2>
 
-                    <p style={{ margin: "8px 0 0", fontSize: 13, color: THEME.subtleText }}>
+                    <p style={{ margin: "6px 0 0", fontSize: 13, color: THEME.subtleText }}>
                       Does this require immediate Operations attention?
                     </p>
 
-                    <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       {[
                         { value: "standard", title: "Standard", description: "Operations will review and prioritise the issue." },
                         { value: "critical", title: "Critical", description: "Immediate review may be required." },
                       ].map((option) => {
                         const selected = attention === option.value;
                         return (
-                          <label key={option.value} style={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 10, padding: 14, borderRadius: 12, border: selected ? "2px solid #2563EB" : `1px solid ${THEME.inputBorder}`, background: selected ? "#EFF6FF" : "#FFFFFF", cursor: "pointer" }}>
+                          <label key={option.value} style={{ display: "grid", gridTemplateColumns: "22px 1fr", gap: 10, padding: 11, borderRadius: 12, border: selected ? "2px solid #2563EB" : `1px solid ${THEME.inputBorder}`, background: selected ? "#EFF6FF" : "#FFFFFF", cursor: "pointer" }}>
                             <input type="radio" name="attention" value={option.value} checked={selected} onChange={() => setAttention(option.value)} style={{ marginTop: 3 }} />
                             <span>
                               <span style={{ display: "block", fontWeight: 850, color: THEME.heading }}>{option.title}</span>
@@ -346,7 +346,7 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
                     ) : null}
                   </section>
 
-                  <section style={{ padding: 22, borderTop: `1px solid ${THEME.subtleBorder}`, background: "#F8FAFC" }}>
+                  <section style={{ padding: 16, borderTop: `1px solid ${THEME.subtleBorder}`, background: "#F8FAFC" }}>
                     {error ? (
                       <div style={{ marginBottom: 14, padding: 12, borderRadius: 10, border: `1px solid ${THEME.dangerBorder}`, background: THEME.dangerBg, color: THEME.dangerText, fontSize: 13 }}>
                         {error}
@@ -372,7 +372,7 @@ export default function ReportOperationalIssue({ onOpenDashboard }) {
                 </div>
               </form>
 
-              <aside style={{ marginTop: 18, padding: 15, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF", color: THEME.subtleText, fontSize: 12, lineHeight: 1.6 }}>
+              <aside style={{ marginTop: 12, padding: 12, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF", color: THEME.subtleText, fontSize: 12, lineHeight: 1.6 }}>
                 <strong style={{ color: THEME.heading }}>Demo notice:</strong> In a production environment,
                 incident reporting could be initiated from multiple sources including an internal portal,
                 Slack integration, Microsoft Teams, monitoring systems or a lightweight desktop widget.

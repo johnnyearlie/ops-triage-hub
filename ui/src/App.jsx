@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ReportOperationalIssue from "./components/ReportOperationalIssue";
+import "./App.css";
 
 const API = {
   health: "/api/ops/health",
@@ -1155,51 +1156,112 @@ export default function App() {
     return Number.isFinite(value) ? value : null;
   }
 
-  function operationalHealthNarrative() {
-    const status = String(health?.score?.status || "").toUpperCase();
-    const breached = Number(health?.breached_total ?? 0);
-    const activeCount = Number(health?.active_total ?? active.length ?? 0);
+  function standupPoints() {
+    const breaches = Number(health?.breached_total ?? 0);
+    const aged = Number(health?.aging_buckets?.gte_24h ?? 0);
+    const critical = (health?.breached || []).find((incident) => incident.priority === "P0");
+    const points = [];
 
-    let opening = "Operational performance is currently stable.";
-    if (status === "RED") opening = "Operational performance requires immediate attention.";
-    else if (status === "AMBER") opening = "Service levels remain under pressure and require active management.";
-    else if (status === "GREEN") opening = "Operational performance is currently within expected service levels.";
+    if (critical) {
+      points.push({
+        title: "Critical incident requires review",
+        detail: `${critical.title} · ${formatDurationMinutes(critical.age_minutes)} open`,
+      });
+    } else if (breaches > 0) {
+      points.push({
+        title: "SLA exposure requires attention",
+        detail: `${breaches} active incident${breaches === 1 ? " has" : "s have"} exceeded SLA`,
+      });
+    } else {
+      points.push({
+        title: "No critical SLA exposure",
+        detail: "No active critical SLA breach is currently recorded",
+      });
+    }
 
-    const statements = [
-      breached > 0
-        ? `${breached} active incident${breached === 1 ? " has" : "s have"} exceeded SLA and require review.`
-        : "No active SLA breaches are currently recorded.",
-      activeCount > 0
-        ? `${activeCount} incident${activeCount === 1 ? " is" : "s are"} currently active across the operation.`
-        : "There are no active incidents requiring operational review.",
-      mttrMinutesForPeriod() != null
-        ? `Average resolution time over the last ${kpiDays} days is ${formatDurationMinutes(mttrMinutesForPeriod())}.`
-        : `An MTTR value is not available for the selected ${kpiDays}-day reporting period.`,
-    ];
+    if (breaches > 0 && !critical) {
+      points.push({
+        title: "Review breached incidents",
+        detail: `${breaches} active incident${breaches === 1 ? " is" : "s are"} outside SLA`,
+      });
+    } else if (breaches > 0) {
+      points.push({
+        title: "SLA exposure remains elevated",
+        detail: `${breaches} active incident${breaches === 1 ? " is" : "s are"} outside SLA`,
+      });
+    } else {
+      points.push({
+        title: "Service levels are within SLA",
+        detail: `${health?.active_total ?? active.length} active incident${(health?.active_total ?? active.length) === 1 ? "" : "s"} currently recorded`,
+      });
+    }
 
-    return { opening, statements };
+    points.push(aged > 0
+      ? {
+          title: "Backlog requires review",
+          detail: `${aged} incident${aged === 1 ? " has" : "s have"} remained open for 24h+`,
+        }
+      : {
+          title: "No aged backlog",
+          detail: "No active incidents have remained open for 24h+",
+        });
+
+    return points.slice(0, 3);
+  }
+
+  function attentionItems() {
+    const breaches = Array.isArray(health?.breached) ? health.breached : [];
+    const p0 = breaches.find((incident) => incident.priority === "P0");
+    const aged = Number(health?.aging_buckets?.gte_24h ?? 0);
+    const items = [];
+
+    if (p0) {
+      items.push({
+        title: "P0 SLA breach",
+        detail: `${p0.title} · ${formatDurationMinutes(p0.age_minutes)} open`,
+        tone: "red",
+      });
+    }
+
+    if (breaches.length > 0) {
+      const mostOverdue = breaches[0];
+      items.push({
+        title: `${breaches.length} SLA breach${breaches.length === 1 ? "" : "es"}`,
+        detail: mostOverdue ? `Highest overdue: ${formatDurationMinutes(mostOverdue.overdue_minutes)}` : "Review breached incidents",
+        tone: "amber",
+      });
+    }
+
+    if (aged > 0) {
+      items.push({
+        title: `${aged} incident${aged === 1 ? "" : "s"} aged 24h+`,
+        detail: "Backlog review required",
+        tone: "amber",
+      });
+    }
+
+    if (!items.length) {
+      items.push({
+        title: "No immediate exceptions",
+        detail: "No SLA breaches or 24h+ backlog currently require attention",
+        tone: "green",
+      });
+    }
+
+    return items.slice(0, 3);
   }
 
   const Page = {
-    padding: 18,
     minHeight: "100vh",
     background: THEME.pageBg,
     color: THEME.text,
   };
 
   const Container = {
-    maxWidth: 1120,
     margin: "0 auto",
     display: "grid",
     gap: 14,
   };
-
-  const SectionGrid = (columns) => ({
-    display: "grid",
-    gridTemplateColumns: columns,
-    gap: 10,
-    alignItems: "start",
-  });
 
   const RowTile = (isSelected = false) => ({
     padding: 12,
@@ -1228,18 +1290,9 @@ export default function App() {
 
   if (currentView === "dashboard") {
     return (
-      <div style={Page}>
-        <div style={Container}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 16,
-              alignItems: "center",
-              paddingBottom: 12,
-              borderBottom: `1px solid ${THEME.subtleBorder}`,
-            }}
-          >
+      <div style={Page} className="oth-page">
+        <div style={Container} className="oth-container">
+          <div className="oth-dashboard-header" style={{ borderBottom: `1px solid ${THEME.subtleBorder}` }}>
             <div>
               <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: -0.3 }}>
                 Ops Triage Hub
@@ -1255,9 +1308,6 @@ export default function App() {
                 }}
               >
                 Operational Decision Support
-              </div>
-              <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4 }}>
-                Helping Operations teams make better decisions when it matters most.
               </div>
             </div>
 
@@ -1285,253 +1335,74 @@ export default function App() {
             </div>
           ) : null}
 
-          <div style={SectionGrid("1.15fr 0.85fr")}>
-            <Card
-              title="Operational Health KPIs"
-              right={
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  <div style={{ width: 92 }}>
-                    <Select
-                      value={String(kpiDays)}
-                      onChange={(value) => setKpiDays(Number(value))}
-                      options={["7", "30", "90"]}
-                    />
-                  </div>
-                  {health?.score?.status ? (
-                    <Pill tone={String(health.score.status).toLowerCase()}>
-                      {String(health.score.status).toUpperCase()}
-                    </Pill>
-                  ) : null}
-                  <SmallActionButton onClick={() => setHealthSectionOpen((current) => !current)}>
-                    {healthSectionOpen ? "Collapse" : "Expand"}
-                  </SmallActionButton>
-                </div>
-              }
-            >
-              {healthSectionOpen ? (
-                <>
-                  <div style={{ fontSize: 13, color: THEME.text, lineHeight: 1.6 }}>
-                    <div style={{ fontWeight: 800 }}>{operationalHealthNarrative().opening}</div>
-                    <div style={{ marginTop: 8, display: "grid", gap: 5 }}>
-                      {operationalHealthNarrative().statements.map((statement, index) => (
-                        <div key={index}>• {statement}</div>
-                      ))}
-                    </div>
-                  </div>
-
-              <div
-                style={{
-                  marginTop: 14,
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, 1fr)",
-                  gap: 10,
-                }}
-              >
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: `1px solid ${THEME.subtleBorder}`,
-                    background: "#F8FAFC",
-                  }}
-                >
-                  <Label>Active incidents</Label>
-                  <div style={{ fontSize: 22, fontWeight: 900 }}>
-                    {health?.active_total ?? active.length}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: `1px solid ${THEME.subtleBorder}`,
-                    background: "#F8FAFC",
-                  }}
-                >
-                  <Label>SLA breached</Label>
-                  <div style={{ fontSize: 22, fontWeight: 900 }}>
-                    {health?.breached_total ?? "—"}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: `1px solid ${THEME.subtleBorder}`,
-                    background: "#F8FAFC",
-                  }}
-                >
-                  <Label>MTTR average ({kpiDays}d)</Label>
-                  <div style={{ fontSize: 22, fontWeight: 900 }}>
-                    {formatDurationMinutes(mttrMinutesForPeriod())}
-                  </div>
-                </div>
+          <Card
+            title="Operational Health KPIs"
+            right={
+              <div style={{ width: 96 }}>
+                <Select
+                  value={String(kpiDays)}
+                  onChange={(value) => setKpiDays(Number(value))}
+                  options={["7", "30", "90"]}
+                />
               </div>
-                </>
-              ) : (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  Operational Health KPIs is collapsed.
+            }
+          >
+            <div className="oth-kpi-grid">
+              {[
+                ["Active", health?.active_total ?? active.length],
+                ["SLA breached", health?.breached_total ?? "—"],
+                ["Resolved <24h", kpis?.resolved_under_24h_count ?? "—"],
+                ["Resolved <48h", kpis?.resolved_under_48h_count ?? "—"],
+                ["MTTR", formatDurationMinutes(mttrMinutesForPeriod())],
+              ].map(([label, value]) => (
+                <div className="oth-kpi-tile" key={label}>
+                  <Label>{label}{label === "MTTR" ? ` (${kpiDays}d)` : ""}</Label>
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>{value}</div>
                 </div>
-              )}
-            </Card>
+              ))}
+            </div>
+          </Card>
 
-            <Card
-              title="Morning Stand-up Summary"
-              right={
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <Pill tone="amber">Team Lead</Pill>
-                  <SmallActionButton onClick={() => setStandupSectionOpen((current) => !current)}>
-                    {standupSectionOpen ? "Collapse" : "Expand"}
-                  </SmallActionButton>
-                </div>
-              }
-            >
-              {standupSectionOpen ? (
-                <>
-              <div style={{ display: "grid", gap: 10 }}>
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: "1px solid #FCD34D",
-                    background: "#FFFBEB",
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 800, color: "#92400E" }}>
-                    TODAY'S PRIORITY
-                  </div>
-                  <div style={{ marginTop: 5, fontWeight: 900, color: THEME.heading }}>
-                    Review customer-facing payment and access incidents first.
-                  </div>
-                </div>
-
-                <div style={{ fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
-                  Confirm the scope of critical reports before escalation. Resolve quick wins where
-                  capacity allows, but do not allow them to delay high-impact investigations.
-                </div>
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <Pill tone="red">Escalations: 1</Pill>
-                  <Pill tone="amber">Customer impact</Pill>
-                  <Pill>Revenue awareness</Pill>
-                </div>
-
-                <div style={{ paddingTop: 8, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 11, color: THEME.subtleText, lineHeight: 1.45 }}>
-                  Stand-up context can be ingested from collaboration and meeting-summary tools via API. Demo data represents an imported morning operations summary.
-                </div>
-              </div>
-                </>
-              ) : (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  Morning Stand-up Summary is collapsed.
-                </div>
-              )}
-            </Card>
-          </div>
-
-          <div style={{ ...SectionGrid("0.85fr 1.15fr"), alignItems: "stretch" }}>
-            <Card
-              title="Revenue Performance"
-              right={
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <Pill tone="green">Q1 Forecast</Pill>
-                  <SmallActionButton onClick={() => setRevenueSectionOpen((current) => !current)}>
-                    {revenueSectionOpen ? "Collapse" : "Expand"}
-                  </SmallActionButton>
-                </div>
-              }
-            >
-              {revenueSectionOpen ? (
-                <div style={{ display: "grid", gap: 13 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <div>
-                    <Label>Q1 revenue progress</Label>
-                    <div style={{ fontSize: 24, fontWeight: 900 }}>€420,000</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <Label>Target</Label>
-                    <div style={{ fontSize: 16, fontWeight: 900 }}>€1,000,000</div>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    height: 12,
-                    borderRadius: 999,
-                    background: "#E2E8F0",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: "42%",
-                      height: "100%",
-                      borderRadius: 999,
-                      background: "#2563EB",
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                  <span style={{ fontSize: 12, color: THEME.subtleText }}>
-                    42% of quarterly target achieved
-                  </span>
-                  <span style={{ fontSize: 12, fontWeight: 900, color: "#166534" }}>
-                    On track
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    padding: 11,
-                    borderRadius: 12,
-                    border: "1px solid #BFDBFE",
-                    background: "#EFF6FF",
-                    color: "#1E3A8A",
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Revenue context helps Operations assess the wider impact of customer-facing
-                  disruption and delayed delivery.
-                </div>
-              </div>
-              ) : (
-                <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                  Revenue Performance is collapsed.
-                </div>
-              )}
-            </Card>
-
-            <Card title="Operational Priorities">
-              <div style={{ display: "grid", gap: 8 }}>
-                {(recs?.recommendations || []).slice(0, 3).map((recommendation) => (
-                  <div
-                    key={recommendation.rank}
-                    style={{
-                      padding: 11,
-                      borderRadius: 12,
-                      border: `1px solid ${THEME.subtleBorder}`,
-                      background: "#F8FAFC",
-                    }}
-                  >
-                    <div style={{ fontWeight: 900 }}>{recommendation.title}</div>
-                    <div style={{ fontSize: 12, color: THEME.subtleText, marginTop: 4, lineHeight: 1.5 }}>
-                      {recommendation.why}
+          <div className="oth-dashboard-pair">
+            <Card title="Morning Stand-up">
+              <div className="oth-summary-list">
+                {standupPoints().map((point, index) => (
+                  <div className="oth-summary-item" key={`${point.title}-${index}`}>
+                    <div className="oth-summary-index">{index + 1}</div>
+                    <div>
+                      <div style={{ fontWeight: 900, color: THEME.heading }}>{point.title}</div>
+                      <div style={{ marginTop: 3, fontSize: 12, color: THEME.subtleText }}>{point.detail}</div>
                     </div>
                   </div>
                 ))}
+              </div>
+            </Card>
 
-                {!recs?.recommendations?.length ? (
-                  <div style={{ fontSize: 12, color: THEME.subtleText }}>
-                    No operational priorities are available.
+            <Card title="Needs Attention">
+              <div className="oth-summary-list">
+                {attentionItems().map((item, index) => (
+                  <div className="oth-attention-item" key={`${item.title}-${index}`}>
+                    <Pill tone={item.tone}>{item.tone === "red" ? "Critical" : item.tone === "amber" ? "Review" : "Clear"}</Pill>
+                    <div>
+                      <div style={{ fontWeight: 900, color: THEME.heading }}>{item.title}</div>
+                      <div style={{ marginTop: 3, fontSize: 12, color: THEME.subtleText }}>{item.detail}</div>
+                    </div>
                   </div>
-                ) : null}
+                ))}
               </div>
             </Card>
           </div>
+
+          <Card title="Q1 Target Progress" right={<div style={{ fontWeight: 900, color: THEME.heading }}>42%</div>}>
+            <div className="oth-target-progress">
+              <div style={{ fontSize: 13, fontWeight: 800, color: THEME.heading, whiteSpace: "nowrap" }}>
+                €420k / €1m
+              </div>
+              <div className="oth-progress-track" aria-label="Q1 target progress: 42 percent">
+                <div className="oth-progress-fill" style={{ width: "42%" }} />
+              </div>
+            </div>
+          </Card>
 
           <Card
             title={`Active Incidents (${dashboardIncidents.length})`}
@@ -1961,9 +1832,10 @@ export default function App() {
   }
 
   return (
-    <div style={Page}>
-      <div style={Container}>
+    <div style={Page} className="oth-page">
+      <div style={Container} className="oth-container">
         <div
+          className="oth-workspace-header"
           style={{
             display: "flex",
             justifyContent: "space-between",
