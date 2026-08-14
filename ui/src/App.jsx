@@ -14,6 +14,7 @@ const API = {
   patchIncident: (id) => `/api/incidents/${id}`,
   deleteIncident: (id) => `/api/incidents/${id}`,
   allocateIncident: (id) => `/api/incidents/${id}/allocate`,
+  addEvidence: (id) => `/api/incidents/${id}/evidence`,
   assistant: "/api/ai/assistant",
 };
 
@@ -70,6 +71,23 @@ async function jfetch(url, opts) {
   }
 
   return data;
+}
+
+function formatTimelineEvent(eventType) {
+  const labels = {
+    created: "Incident created",
+    initial_triage_generated: "Initial triage generated",
+    ai_assessment_generated: "AI assessment generated",
+    priority_changed: "Priority changed",
+    status_changed: "Status changed",
+    owner_assigned: "Incident owner assigned",
+    note_added: "Note added",
+    evidence_added: "Incident information added",
+    resolved_by: "Resolver recorded",
+    resolution_notes: "Resolution notes added",
+    resolved_at: "Incident resolved",
+  };
+  return labels[eventType] || String(eventType || "Activity").replaceAll("_", " ");
 }
 
 function formatDateTime(isoString) {
@@ -406,6 +424,11 @@ export default function App() {
   const [uResolvedBy, setUResolvedBy] = useState("On-call");
   const [uNotes, setUNotes] = useState("");
   const [uNote, setUNote] = useState("");
+  const [evidenceCategory, setEvidenceCategory] = useState("New information");
+  const [evidenceText, setEvidenceText] = useState("");
+  const [addingEvidence, setAddingEvidence] = useState(false);
+  const [evidenceSuccess, setEvidenceSuccess] = useState("");
+  const [evidenceError, setEvidenceError] = useState("");
   const [updating, setUpdating] = useState(false);
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -702,6 +725,33 @@ export default function App() {
       setErr(error.message || "Incident update failed");
     } finally {
       setUpdating(false);
+    }
+  }
+
+
+  async function addIncidentEvidence() {
+    if (!selectedId || !evidenceText.trim()) return;
+    setAddingEvidence(true);
+    setEvidenceError("");
+    setEvidenceSuccess("");
+    try {
+      await jfetch(API.addEvidence(selectedId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: evidenceCategory,
+          information: evidenceText.trim(),
+          added_by: "Operations Manager",
+        }),
+      });
+      setEvidenceText("");
+      setEvidenceSuccess("New incident information added to the operational record.");
+      await loadAll();
+      await loadTimeline(selectedId);
+    } catch (error) {
+      setEvidenceError(error.message || "Incident information could not be added.");
+    } finally {
+      setAddingEvidence(false);
     }
   }
 
@@ -1048,8 +1098,27 @@ export default function App() {
     };
   }
 
+  function reportedContextFor(incident) {
+    const legacy = parseReportedContext(incident?.description || "");
+    return {
+      reporter: incident?.reporter_name || legacy.reporter,
+      role: incident?.reporter_role || legacy.role,
+      department: incident?.reporter_department || legacy.department,
+      contact: incident?.reporter_contact || "Not recorded",
+      reportSource: incident?.report_source || "Not recorded",
+      sourceReference: incident?.source_reference || "Not recorded",
+      originalReport: incident?.original_report || "Not recorded",
+      businessArea: incident?.business_area || legacy.businessArea,
+      attentionRequested: legacy.attentionRequested,
+      description: incident?.description || legacy.description,
+    };
+  }
+
   function operationalSignalsFor(incident) {
-    const context = parseReportedContext(incident?.description);
+    if (incident?.initial_triage?.operational_risk) {
+      return [incident.initial_triage.operational_risk];
+    }
+    const context = reportedContextFor(incident);
     const source = `${incident?.title || ""} ${context.description || ""} ${context.businessArea || ""}`.toLowerCase();
     const signals = [];
 
@@ -1080,7 +1149,7 @@ export default function App() {
   }
 
   function operationalAttentionFor(incident) {
-    const context = parseReportedContext(incident?.description);
+    const context = reportedContextFor(incident);
     const source = `${incident?.title || ""} ${context.description || ""} ${context.businessArea || ""}`.toLowerCase();
     const criticalRequested = String(context.attentionRequested || "").toLowerCase() === "critical";
 
@@ -1448,7 +1517,7 @@ export default function App() {
               {dashboardIncidents.map((incident) => {
                 const attention = operationalAttentionFor(incident);
                 const isExpanded = expandedIncidentId === incident.id;
-                const context = parseReportedContext(incident.description);
+                const context = reportedContextFor(incident);
                 const signals = operationalSignalsFor(incident);
 
                 return (
@@ -1599,7 +1668,7 @@ export default function App() {
                             }}
                           >
                             <div style={{ fontWeight: 900, color: "#1E3A8A" }}>
-                              Operational Signals
+                              Operational Risks
                             </div>
                             <Pill tone={attention.tone}>{attention.label}</Pill>
                           </div>
@@ -1633,7 +1702,7 @@ export default function App() {
                               color: "#1E3A8A",
                             }}
                           >
-                            Operational Signals assist initial review. Operational decisions remain
+                            Operational Risks assist initial review. Operational decisions remain
                             the responsibility of the Operations Team.
                           </div>
 
@@ -2028,19 +2097,19 @@ export default function App() {
                     <div>
                       <Label>Reported by</Label>
                       <div style={{ fontSize: 13, fontWeight: 800 }}>
-                        {parseReportedContext(selectedIncident.description).reporter}
+                        {reportedContextFor(selectedIncident).reporter}
                       </div>
                     </div>
                     <div>
                       <Label>Department</Label>
                       <div style={{ fontSize: 13, fontWeight: 800 }}>
-                        {parseReportedContext(selectedIncident.description).department}
+                        {reportedContextFor(selectedIncident).department}
                       </div>
                     </div>
                     <div>
                       <Label>Business area</Label>
                       <div style={{ fontSize: 13, fontWeight: 800 }}>
-                        {parseReportedContext(selectedIncident.description).businessArea}
+                        {reportedContextFor(selectedIncident).businessArea}
                       </div>
                     </div>
                     <div>
@@ -2051,10 +2120,25 @@ export default function App() {
                     </div>
                   </div>
 
+                  <div className="oth-provenance-grid" style={{ marginTop: 12 }}>
+                    <div><Label>Contact</Label><div style={{ fontSize: 13, fontWeight: 800 }}>{reportedContextFor(selectedIncident).contact}</div></div>
+                    <div><Label>Source</Label><div style={{ fontSize: 13, fontWeight: 800 }}>{reportedContextFor(selectedIncident).reportSource}</div></div>
+                    <div><Label>Source reference</Label><div style={{ fontSize: 13, fontWeight: 800 }}>{reportedContextFor(selectedIncident).sourceReference}</div></div>
+                  </div>
+
+                  {reportedContextFor(selectedIncident).originalReport !== "Not recorded" ? (
+                    <div style={{ marginTop: 14 }}>
+                      <Label>Original report or message</Label>
+                      <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", padding: 10, borderRadius: 10, background: "#F8FAFC", border: `1px solid ${THEME.subtleBorder}` }}>
+                        {reportedContextFor(selectedIncident).originalReport}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div style={{ marginTop: 14 }}>
                     <Label>Reported issue</Label>
                     <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                      {parseReportedContext(selectedIncident.description).description ||
+                      {reportedContextFor(selectedIncident).description ||
                         "No issue description was recorded."}
                     </div>
                   </div>
@@ -2077,7 +2161,7 @@ export default function App() {
                     }}
                   >
                     <div style={{ fontWeight: 900, color: "#1E3A8A" }}>
-                      Operational Signals
+                      Operational Risks
                     </div>
                     <Pill tone={operationalAttentionFor(selectedIncident).tone}>
                       {operationalAttentionFor(selectedIncident).label}
@@ -2103,6 +2187,14 @@ export default function App() {
                     ))}
                   </div>
 
+                  {selectedIncident.initial_triage ? (
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #BFDBFE" }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#1E3A8A", textTransform: "uppercase", letterSpacing: 0.4 }}>Initial operational review</div>
+                      <div style={{ marginTop: 6, fontSize: 13, fontWeight: 850, color: "#1E3A8A" }}>Suggested priority: {selectedIncident.initial_triage.suggested_priority || "Review"}</div>
+                      <div style={{ marginTop: 5, fontSize: 13, lineHeight: 1.5, color: "#1E3A8A" }}>{selectedIncident.initial_triage.reason}</div>
+                      <div style={{ marginTop: 7, fontSize: 12, color: "#1E3A8A" }}>Source: {selectedIncident.initial_triage_source || "Recorded assessment"} · Operations confirmation required</div>
+                    </div>
+                  ) : null}
                   <div
                     style={{
                       marginTop: 12,
@@ -2113,7 +2205,7 @@ export default function App() {
                       color: "#1E3A8A",
                     }}
                   >
-                    Operational Signals assist initial review. Operational decisions remain the
+                    Operational Risks assist initial review. Operational decisions remain the
                     responsibility of the Operations Team.
                   </div>
                 </div>
@@ -2224,16 +2316,28 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
-                <Label>Add a note</Label>
-                <textarea
-                  value={uNote}
-                  onChange={(event) => setUNote(event.target.value)}
-                  placeholder="Add an operational note (optional)"
-                  rows={2}
-                  disabled={!selectedIncident || selectedReadOnly}
-                  style={{ ...InputBaseStyle(!selectedIncident || selectedReadOnly), resize: "vertical" }}
-                />
+              <div style={{ padding: 12, borderRadius: 12, border: "1px solid #BFDBFE", background: "#F8FBFF" }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: "#2563EB", textTransform: "uppercase", letterSpacing: 0.4 }}>Add Incident Information</div>
+                <div style={{ marginTop: 5, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                  Add new evidence as it becomes available. The original report is preserved; each update is timestamped in Activity History and becomes available to future AI assessments.
+                </div>
+                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "220px 1fr", gap: 10, alignItems: "start" }}>
+                  <div>
+                    <Label>Information type</Label>
+                    <Select value={evidenceCategory} onChange={setEvidenceCategory} options={["New information", "Investigation finding", "Customer impact", "Technical finding", "Workaround", "External update"]} disabled={!selectedIncident || selectedReadOnly || addingEvidence} />
+                  </div>
+                  <div>
+                    <Label>New operational information</Label>
+                    <textarea value={evidenceText} onChange={(event) => setEvidenceText(event.target.value)} placeholder="What has been learned since the incident was reported?" rows={3} disabled={!selectedIncident || selectedReadOnly || addingEvidence} style={{ ...InputBaseStyle(!selectedIncident || selectedReadOnly || addingEvidence), resize: "vertical" }} />
+                  </div>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <Button onClick={addIncidentEvidence} disabled={!selectedIncident || selectedReadOnly || addingEvidence || !evidenceText.trim()} variant="primary">
+                    {addingEvidence ? "Adding…" : "Add to Incident Record"}
+                  </Button>
+                </div>
+                {evidenceSuccess ? <div style={{ marginTop: 8, fontSize: 12, color: "#166534", fontWeight: 750 }}>✓ {evidenceSuccess}</div> : null}
+                {evidenceError ? <div style={{ marginTop: 8, fontSize: 12, color: THEME.dangerText }}>{evidenceError}</div> : null}
               </div>
 
               {uStatus === "resolved" ? (
@@ -2893,7 +2997,7 @@ export default function App() {
 
                   <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
-                      Incident Owner
+                      Step 1 — Incident Owner
                     </div>
 
                     {selectedIncident?.owner_team ? (
@@ -2969,7 +3073,7 @@ export default function App() {
 
                 <div style={{ padding: 14, borderRadius: 12, border: `1px solid ${THEME.subtleBorder}`, background: "#FFFFFF" }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: THEME.subtleText, textTransform: "uppercase" }}>
-                    Stakeholder Communications
+                    Step 2 — Stakeholder Communications
                   </div>
                   <div style={{ marginTop: 5, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
                     Record who needs visibility. This is separate from incident ownership and can include any affected business area.
@@ -3031,11 +3135,6 @@ export default function App() {
                     </Button>
                   </div>
 
-                  {!selectedIncident?.owner_team ? (
-                    <div style={{ marginTop: 7, fontSize: 12, color: THEME.subtleText }}>
-                      Assign an incident owner before recording stakeholder notifications.
-                    </div>
-                  ) : null}
 
                   {notificationSuccess ? (
                     <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>
@@ -3123,10 +3222,6 @@ export default function App() {
                 </div>
               ) : (
                 <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
-                  <div style={{ padding: 12, borderRadius: 12, border: "1px solid #99F6E4", background: "#FFFFFF", fontSize: 13, lineHeight: 1.55, color: THEME.text }}>
-                    Operations verifies that the response is complete, records what resolved the issue and closes the incident. For V1, Operations may record the resolution on behalf of the contributing stakeholder so the operational record remains searchable later.
-                  </div>
-
                   <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.2fr", gap: 10 }}>
                     <div>
                       <Label>Resolved by</Label>
@@ -3214,6 +3309,21 @@ export default function App() {
                   <div style={{ display: "grid", gap: 8 }}>
                     {(timeline || []).slice(0, 100).map((event) => {
                       const allocation = parseTimelineAllocation(event);
+                      let evidence = null;
+                      if (event.event_type === "evidence_added" && event.new_value) {
+                        try { evidence = JSON.parse(event.new_value); } catch { evidence = null; }
+                      }
+                      let aiActivityText = null;
+                      if (event.event_type === "ai_assessment_generated") {
+                        try {
+                          const meta = JSON.parse(event.new_value || "{}");
+                          const model = meta.model ? String(meta.model).replace(/^gpt-/, "GPT-") : "AI";
+                          const tokens = meta.usage?.total_tokens;
+                          aiActivityText = `${meta.source || "OpenAI"} ${model}${tokens ? ` · ${Number(tokens).toLocaleString()} tokens` : ""}`;
+                        } catch {
+                          aiActivityText = "AI operational assessment generated";
+                        }
+                      }
                       return (
                         <div
                           key={event.id}
@@ -3225,7 +3335,7 @@ export default function App() {
                           }}
                         >
                           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                            <div style={{ fontWeight: 900, fontSize: 13 }}>{event.event_type}</div>
+                            <div style={{ fontWeight: 900, fontSize: 13 }}>{formatTimelineEvent(event.event_type)}</div>
                             <div style={{ fontSize: 12, color: THEME.subtleText }}>{formatDateTime(event.created_at)}</div>
                           </div>
 
@@ -3240,7 +3350,18 @@ export default function App() {
                             </div>
                           ) : null}
 
-                          {!allocation && (event.old_value || event.new_value) ? (
+                          {evidence ? (
+                            <div style={{ marginTop: 7, fontSize: 12, color: THEME.text, lineHeight: 1.5 }}>
+                              <div><b>{evidence.category}</b> · added by {evidence.added_by}</div>
+                              <div style={{ marginTop: 3 }}>{evidence.information}</div>
+                            </div>
+                          ) : null}
+
+                          {aiActivityText ? (
+                            <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>{aiActivityText}</div>
+                          ) : null}
+
+                          {!allocation && !evidence && !aiActivityText && (event.old_value || event.new_value) ? (
                             <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>
                               {event.old_value ? <span>from <b style={{ color: THEME.text }}>{event.old_value}</b> </span> : null}
                               {event.new_value ? <span>to <b style={{ color: THEME.text }}>{event.new_value}</b></span> : null}

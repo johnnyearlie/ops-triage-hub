@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.ai import generate_ai_summary
+from app.ai import generate_ai_summary, generate_initial_triage
 
 # =========================================
 # Config
@@ -128,7 +128,20 @@ def init_db() -> None:
             owner_assigned_at TEXT,
             owner_assigned_by TEXT,
             owner_assignment_reason TEXT,
-            recommendation_accepted INTEGER NOT NULL DEFAULT 0
+            recommendation_accepted INTEGER NOT NULL DEFAULT 0,
+            reporter_name TEXT,
+            reporter_role TEXT,
+            reporter_department TEXT,
+            reporter_contact TEXT,
+            report_source TEXT,
+            source_reference TEXT,
+            original_report TEXT,
+            business_area TEXT,
+            reporter_attention TEXT,
+            initial_triage_json TEXT,
+            initial_triage_source TEXT,
+            initial_triage_generated_at TEXT,
+            initial_triage_model TEXT
         )
         """
     )
@@ -170,6 +183,32 @@ def init_db() -> None:
         cur.execute("ALTER TABLE incidents ADD COLUMN owner_assignment_reason TEXT")
     if not _has_column(conn, "incidents", "recommendation_accepted"):
         cur.execute("ALTER TABLE incidents ADD COLUMN recommendation_accepted INTEGER NOT NULL DEFAULT 0")
+    if not _has_column(conn, "incidents", "reporter_name"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN reporter_name TEXT")
+    if not _has_column(conn, "incidents", "reporter_role"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN reporter_role TEXT")
+    if not _has_column(conn, "incidents", "reporter_department"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN reporter_department TEXT")
+    if not _has_column(conn, "incidents", "reporter_contact"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN reporter_contact TEXT")
+    if not _has_column(conn, "incidents", "report_source"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN report_source TEXT")
+    if not _has_column(conn, "incidents", "source_reference"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN source_reference TEXT")
+    if not _has_column(conn, "incidents", "original_report"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN original_report TEXT")
+    if not _has_column(conn, "incidents", "business_area"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN business_area TEXT")
+    if not _has_column(conn, "incidents", "reporter_attention"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN reporter_attention TEXT")
+    if not _has_column(conn, "incidents", "initial_triage_json"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN initial_triage_json TEXT")
+    if not _has_column(conn, "incidents", "initial_triage_source"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN initial_triage_source TEXT")
+    if not _has_column(conn, "incidents", "initial_triage_generated_at"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN initial_triage_generated_at TEXT")
+    if not _has_column(conn, "incidents", "initial_triage_model"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN initial_triage_model TEXT")
 
     conn.commit()
     conn.close()
@@ -194,6 +233,16 @@ def _row_get(row: sqlite3.Row, key: str, default=None):
         return default
 
 
+def _parse_json_object(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
 def incident_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     return {
         "id": _row_get(row, "id"),
@@ -212,6 +261,19 @@ def incident_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "owner_assigned_by": _row_get(row, "owner_assigned_by"),
         "owner_assignment_reason": _row_get(row, "owner_assignment_reason"),
         "recommendation_accepted": bool(_row_get(row, "recommendation_accepted", 0)),
+        "reporter_name": _row_get(row, "reporter_name"),
+        "reporter_role": _row_get(row, "reporter_role"),
+        "reporter_department": _row_get(row, "reporter_department"),
+        "reporter_contact": _row_get(row, "reporter_contact"),
+        "report_source": _row_get(row, "report_source"),
+        "source_reference": _row_get(row, "source_reference"),
+        "original_report": _row_get(row, "original_report"),
+        "business_area": _row_get(row, "business_area"),
+        "reporter_attention": _row_get(row, "reporter_attention"),
+        "initial_triage": _parse_json_object(_row_get(row, "initial_triage_json")),
+        "initial_triage_source": _row_get(row, "initial_triage_source"),
+        "initial_triage_generated_at": _row_get(row, "initial_triage_generated_at"),
+        "initial_triage_model": _row_get(row, "initial_triage_model"),
     }
 
 
@@ -338,6 +400,15 @@ class IncidentCreate(BaseModel):
     title: str = Field(min_length=3, max_length=120)
     description: str = Field(min_length=10, max_length=5000)
     priority: str = Field(default="P2")
+    reporter_name: Optional[str] = None
+    reporter_role: Optional[str] = None
+    reporter_department: Optional[str] = None
+    reporter_contact: Optional[str] = None
+    report_source: Optional[str] = None
+    source_reference: Optional[str] = None
+    original_report: Optional[str] = None
+    business_area: Optional[str] = None
+    reporter_attention: Optional[str] = None
 
 
 class IncidentPatch(BaseModel):
@@ -371,6 +442,12 @@ class IncidentAllocationRequest(BaseModel):
     recommendation_accepted: bool = False
 
 
+class IncidentEvidenceRequest(BaseModel):
+    category: str = Field(min_length=1, max_length=120)
+    information: str = Field(min_length=1, max_length=5000)
+    added_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
+
+
 # =========================================
 # App
 # =========================================
@@ -401,23 +478,163 @@ def healthcheck() -> Dict[str, str]:
 # =========================================
 @app.post("/incidents")
 def create_incident(payload: IncidentCreate) -> Dict[str, Any]:
+    """
+    Persist the reported incident first, then attempt lightweight AI triage.
+
+    AI is decision support only: it never prevents incident creation and it
+    does not silently overwrite the provisional priority supplied at intake.
+    """
     prio = normalize_priority(payload.priority)
     now = utcnow()
+    now_iso = dt_to_iso(now)
     iid = str(uuid.uuid4())
 
+    def clean(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    incident_values = {
+        "reporter_name": clean(payload.reporter_name),
+        "reporter_role": clean(payload.reporter_role),
+        "reporter_department": clean(payload.reporter_department),
+        "reporter_contact": clean(payload.reporter_contact),
+        "report_source": clean(payload.report_source),
+        "source_reference": clean(payload.source_reference),
+        "original_report": clean(payload.original_report),
+        "business_area": clean(payload.business_area),
+        "reporter_attention": clean(payload.reporter_attention),
+    }
+
     conn = db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO incidents (
+                id, title, description, priority, status, created_at, updated_at,
+                reporter_name, reporter_role, reporter_department, reporter_contact,
+                report_source, source_reference, original_report, business_area,
+                reporter_attention
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                iid,
+                payload.title.strip(),
+                payload.description.strip(),
+                prio,
+                "open",
+                now_iso,
+                now_iso,
+                incident_values["reporter_name"],
+                incident_values["reporter_role"],
+                incident_values["reporter_department"],
+                incident_values["reporter_contact"],
+                incident_values["report_source"],
+                incident_values["source_reference"],
+                incident_values["original_report"],
+                incident_values["business_area"],
+                incident_values["reporter_attention"],
+            ),
+        )
+        add_timeline(conn, iid, "created", None, f"{prio} open")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    # Build the persisted incident context used by the lightweight triage.
+    row = conn.execute("SELECT * FROM incidents WHERE id = ?", (iid,)).fetchone()
+    incident_data = incident_row_to_dict(row)
+
+    triage_result: Dict[str, Any]
+    triage_summary: Dict[str, Any]
+    triage_source: str
+    triage_model: Optional[str]
+    triage_generated_at: str
+
+    try:
+        triage_result = generate_initial_triage(incident_data)
+        triage_summary = triage_result.get("summary") or {}
+        if not isinstance(triage_summary, dict) or not triage_summary:
+            raise ValueError("Initial AI triage returned no structured summary.")
+        triage_source = str(triage_result.get("source") or "OpenAI")
+        triage_model = triage_result.get("model")
+        triage_generated_at = str(triage_result.get("generated_at") or dt_to_iso(utcnow()))
+    except Exception:
+        fallback_priority, fallback_steps, fallback_reason = triage_rules(
+            payload.title.strip(),
+            payload.description.strip(),
+        )
+        triage_summary = {
+            "suggested_priority": fallback_priority,
+            "operational_risk": fallback_reason,
+            "reason": fallback_reason,
+            "suggested_first_action": (
+                fallback_steps[0] if fallback_steps else "Review the incident evidence."
+            ),
+            "missing_information": [],
+        }
+        triage_source = "Rule-based fallback"
+        triage_model = None
+        triage_generated_at = dt_to_iso(utcnow())
+
+    # Normalise the persisted lightweight triage contract.
+    suggested_priority = str(triage_summary.get("suggested_priority") or "P2").upper()
+    if suggested_priority not in PRIORITIES:
+        suggested_priority = "P2"
+    triage_summary["suggested_priority"] = suggested_priority
+
+    missing_information = triage_summary.get("missing_information")
+    if not isinstance(missing_information, list):
+        missing_information = []
+    triage_summary["missing_information"] = [
+        str(item).strip()
+        for item in missing_information
+        if str(item).strip()
+    ][:3]
+
+    triage_json = json.dumps(triage_summary, ensure_ascii=False)
+
     conn.execute(
         """
-        INSERT INTO incidents (id, title, description, priority, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        UPDATE incidents
+        SET initial_triage_json = ?,
+            initial_triage_source = ?,
+            initial_triage_generated_at = ?,
+            initial_triage_model = ?,
+            updated_at = ?
+        WHERE id = ?
         """,
-        (iid, payload.title.strip(), payload.description.strip(), prio, "open", dt_to_iso(now), dt_to_iso(now)),
+        (
+            triage_json,
+            triage_source,
+            triage_generated_at,
+            triage_model,
+            dt_to_iso(utcnow()),
+            iid,
+        ),
     )
-    add_timeline(conn, iid, "created", None, f"{prio} open")
-    conn.commit()
-    conn.close()
 
-    return {"id": iid}
+    # Keep the visible timeline value concise/human-readable while preserving
+    # the full assessment in the incident record.
+    add_timeline(
+        conn,
+        iid,
+        "initial_triage_generated",
+        None,
+        f"{triage_source} · suggested {suggested_priority}",
+    )
+    conn.commit()
+
+    return {
+        "id": iid,
+        "initial_triage": triage_summary,
+        "initial_triage_source": triage_source,
+        "initial_triage_generated_at": triage_generated_at,
+        "initial_triage_model": triage_model,
+    }
 
 
 @app.get("/incidents")
@@ -542,6 +759,92 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
     out = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     conn.close()
     return incident_row_to_dict(out)
+
+
+@app.post("/incidents/{incident_id}/evidence")
+def add_incident_evidence(incident_id: str, payload: IncidentEvidenceRequest) -> Dict[str, Any]:
+    """
+    Append new operational information to an existing incident without
+    altering the immutable intake/provenance record.
+
+    Evidence is stored in Activity History as structured JSON so it:
+      - survives refresh/reopening and the full incident lifecycle,
+      - remains human-readable in the current frontend,
+      - is automatically available to future AI assessments because the
+        assistant already receives the incident timeline.
+    """
+    category = payload.category.strip()
+    information = payload.information.strip()
+    added_by = payload.added_by.strip()
+
+    if not category:
+        raise HTTPException(status_code=400, detail="category is required")
+    if not information:
+        raise HTTPException(status_code=400, detail="information is required")
+    if not added_by:
+        raise HTTPException(status_code=400, detail="added_by is required")
+
+    conn = db()
+    try:
+        incident = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        if incident["status"] == "resolved":
+            raise HTTPException(
+                status_code=400,
+                detail="Resolved incidents are read-only; restore/reopen before adding new information.",
+            )
+
+        evidence_record = {
+            "category": category,
+            "information": information,
+            "added_by": added_by,
+        }
+
+        # Deliberately append to the timeline only. Reporter/provenance fields,
+        # original_report and the original description are never overwritten.
+        add_timeline(
+            conn,
+            incident_id,
+            "evidence_added",
+            None,
+            json.dumps(evidence_record, ensure_ascii=False),
+        )
+
+        now_iso = dt_to_iso(utcnow())
+        conn.execute(
+            "UPDATE incidents SET updated_at = ? WHERE id = ?",
+            (now_iso, incident_id),
+        )
+        conn.commit()
+
+        updated = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+
+        return {
+            "success": True,
+            "incident": incident_row_to_dict(updated),
+            "evidence": evidence_record,
+            "recorded_at": now_iso,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Incident information could not be added: {exc}",
+        ) from exc
+    finally:
+        conn.close()
 
 
 @app.post("/incidents/{incident_id}/allocate")
