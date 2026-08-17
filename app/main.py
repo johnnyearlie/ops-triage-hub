@@ -752,7 +752,7 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
         resolved_at = dt_to_iso(now)
 
         add_timeline(conn, incident_id, "resolved_by", row["resolved_by"], resolved_by)
-        add_timeline(conn, incident_id, "resolution_notes", None, "added")
+        add_timeline(conn, incident_id, "resolution_notes", None, resolution_notes)
         add_timeline(conn, incident_id, "resolved_at", row["resolved_at"], resolved_at)
 
     # Status change timeline
@@ -1023,6 +1023,22 @@ def allocate_incident(incident_id: str, payload: IncidentAllocationRequest) -> D
         if not row:
             raise HTTPException(status_code=404, detail="Incident not found")
 
+        if row["status"] == "resolved":
+            raise HTTPException(status_code=400, detail="Resolved incidents cannot be reassigned")
+
+        previous_team = _row_get(row, "owner_team")
+        previous_name = _row_get(row, "owner_name")
+        previous_display = (
+            f"{previous_team} — {previous_name}"
+            if previous_team and previous_name
+            else previous_team
+        )
+        new_display = f"{owner_team} — {owner_name}" if owner_name else owner_team
+        is_reassignment = bool(previous_team)
+
+        if is_reassignment and previous_display == new_display:
+            raise HTTPException(status_code=400, detail="Choose a different owner before confirming the handoff")
+
         conn.execute(
             """
             UPDATE incidents
@@ -1047,26 +1063,34 @@ def allocate_incident(incident_id: str, payload: IncidentAllocationRequest) -> D
             ),
         )
 
-        decision = (
-            "AI recommendation accepted by Operations Manager"
-            if payload.recommendation_accepted
-            else "Owner assigned manually by Operations Manager"
-        )
+        if is_reassignment:
+            decision = "Incident owner reassigned by Operations Manager"
+            event_type = "owner_changed"
+        else:
+            decision = (
+                "AI recommendation accepted by Operations Manager"
+                if payload.recommendation_accepted
+                else "Owner assigned manually by Operations Manager"
+            )
+            event_type = "owner_assigned"
 
         add_timeline(
             conn,
             incident_id,
-            "owner_assigned",
-            None,
+            event_type,
+            previous_display if is_reassignment else None,
             json.dumps(
                 {
                     "owner_team": owner_team,
                     "owner_name": owner_name,
+                    "previous_owner": previous_display,
                     "allocated_by": allocated_by,
+                    "assigned_at": assigned_at,
                     "reason": reason,
                     "decision": decision,
                     "recommendation_accepted": payload.recommendation_accepted,
-                }
+                },
+                ensure_ascii=False,
             ),
         )
 

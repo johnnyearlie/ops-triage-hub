@@ -83,6 +83,7 @@ function formatTimelineEvent(eventType) {
     priority_changed: "Priority changed",
     status_changed: "Status changed",
     owner_assigned: "Incident owner assigned",
+    owner_changed: "Incident owner changed",
     note_added: "Note added",
     evidence_added: "Incident information added",
     stakeholders_notified: "Stakeholders notified",
@@ -191,13 +192,31 @@ function tokenUsageFor(result) {
 }
 
 function parseTimelineAllocation(event) {
-  if (event?.event_type !== "owner_assigned" || !event?.new_value) return null;
+  if (!["owner_assigned", "owner_changed"].includes(event?.event_type) || !event?.new_value) return null;
 
   try {
     return JSON.parse(event.new_value);
   } catch {
     return null;
   }
+}
+
+function initialReviewNeedsRecheck(incident, timeline = []) {
+  if (!incident?.initial_triage) return false;
+
+  const suggestedPriority = String(incident.initial_triage.suggested_priority || "").toUpperCase();
+  const currentPriority = String(incident.priority || "").toUpperCase();
+  const priorityChanged = Boolean(suggestedPriority && currentPriority && suggestedPriority !== currentPriority);
+
+  const generatedAt = new Date(incident.initial_triage_generated_at || 0).getTime();
+  const laterEvidence = (timeline || []).some((event) => {
+    if (event?.event_type !== "evidence_added") return false;
+    if (!generatedAt) return true;
+    const eventAt = new Date(event.created_at || 0).getTime();
+    return Number.isFinite(eventAt) && eventAt > generatedAt;
+  });
+
+  return priorityChanged || laterEvidence;
 }
 
 
@@ -239,6 +258,95 @@ function IncidentJourney({ incident, timeline }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function currentIncidentAction(incident, timeline = []) {
+  const events = [...(timeline || [])].sort(
+    (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
+  );
+  const lastEvent = (type) => [...events].reverse().find((event) => event.event_type === type);
+  const parseJson = (value) => {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const resolutionEvent = lastEvent("resolution_started");
+  const stakeholderEvent = lastEvent("stakeholders_notified");
+  const ownerEvent = lastEvent("owner_assigned");
+  const resolution = parseJson(resolutionEvent?.new_value);
+  const stakeholders = parseJson(stakeholderEvent?.new_value);
+  const owner = parseJson(ownerEvent?.new_value);
+
+  if (incident?.status === "resolved") {
+    return {
+      label: "Resolved",
+      text: incident?.resolution_notes || "The incident has been resolved and verified by Operations.",
+      tone: "resolved",
+    };
+  }
+
+  if (incident?.status === "resolving" || resolutionEvent) {
+    const actor = resolution?.owner || incident?.owner_name || incident?.owner_team || "The incident owner";
+    const action = resolution?.action || "Resolution work is underway.";
+    return {
+      label: "Resolution underway",
+      text: `${actor}: ${action}`,
+      tone: "resolving",
+    };
+  }
+
+  if (stakeholderEvent) {
+    const recipients = Array.isArray(stakeholders?.recipients) ? stakeholders.recipients : [];
+    return {
+      label: "Coordinated",
+      text: recipients.length
+        ? `${recipients.join(", ")} ${recipients.length === 1 ? "has" : "have"} been notified.`
+        : "Stakeholder communication has been recorded.",
+      tone: "coordinated",
+    };
+  }
+
+  if (incident?.owner_team || ownerEvent) {
+    const team = incident?.owner_team || owner?.owner_team || "Incident owner";
+    const name = incident?.owner_name || owner?.owner_name || "";
+    return {
+      label: `With ${team}`,
+      text: name
+        ? `${name} is accountable for progressing this incident.`
+        : `${team} is accountable for progressing this incident.`,
+      tone: "owned",
+    };
+  }
+
+  if (incident?.status === "investigating") {
+    return {
+      label: "In progress",
+      text: "Operations is investigating the issue and establishing the next action.",
+      tone: "investigating",
+    };
+  }
+
+  return {
+    label: "Next",
+    text: "Investigate the reported issue and establish operational impact.",
+    tone: "open",
+  };
+}
+
+function CurrentActionStrip({ incident, timeline }) {
+  const action = currentIncidentAction(incident, timeline);
+
+  return (
+    <div className={`oth-current-action oth-current-action--${action.tone}`}>
+      <div className="oth-current-action-label">{action.label}</div>
+      <div className="oth-current-action-text">{action.text}</div>
     </div>
   );
 }
@@ -936,17 +1044,31 @@ export default function App() {
       return;
     }
 
+    const requestedOwnerName = useRecommendation ? "" : allocationName.trim();
+    const currentOwnerName = String(selectedIncident?.owner_name || "").trim();
+    if (
+      selectedIncident?.owner_team &&
+      ownerTeam === selectedIncident.owner_team &&
+      requestedOwnerName === currentOwnerName
+    ) {
+      setAllocationError("Choose a different owner before confirming the handoff.");
+      return;
+    }
+
     setAllocating(true);
     setAllocationError("");
     setAllocationSuccess("");
 
     try {
-      const baseReason = useRecommendation
-        ? aiResult?.summary?.recommended_incident_owner?.reason ||
-          "AI owner recommendation accepted after Operations Manager review."
-        : aiResult?.summary
-          ? "Operations Manager selected an owner manually after reviewing the AI operational assessment."
-          : "Operations Manager assigned an incident owner without requiring an AI assessment.";
+      const isReassignment = Boolean(selectedIncident?.owner_team);
+      const baseReason = isReassignment
+        ? "Operations Manager reassigned the incident after reviewing the latest investigation evidence."
+        : useRecommendation
+          ? aiResult?.summary?.recommended_incident_owner?.reason ||
+            "AI owner recommendation accepted after Operations Manager review."
+          : aiResult?.summary
+            ? "Operations Manager selected an owner manually after reviewing the AI operational assessment."
+            : "Operations Manager assigned an incident owner without requiring an AI assessment.";
       const reason = allocationNote.trim()
         ? `${baseReason} Coordination note: ${allocationNote.trim()}`
         : baseReason;
@@ -2073,9 +2195,12 @@ export default function App() {
         </div>
 
         {workspaceSection !== "activity" ? (
-          <div className="oth-compact-journey-wrap">
-            <CompactIncidentJourney incident={selectedIncident} timeline={timeline} />
-          </div>
+          <>
+            <div className="oth-compact-journey-wrap">
+              <CompactIncidentJourney incident={selectedIncident} timeline={timeline} />
+            </div>
+            <CurrentActionStrip incident={selectedIncident} timeline={timeline} />
+          </>
         ) : null}
 
         <div
@@ -2321,6 +2446,11 @@ export default function App() {
                       <div style={{ marginTop: 6, fontSize: 13, fontWeight: 850, color: "#1E3A8A" }}>Suggested priority: {selectedIncident.initial_triage.suggested_priority || "Review"}</div>
                       <div style={{ marginTop: 5, fontSize: 13, lineHeight: 1.5, color: "#1E3A8A" }}>{selectedIncident.initial_triage.reason}</div>
                       <div style={{ marginTop: 7, fontSize: 12, color: "#1E3A8A" }}>Source: {selectedIncident.initial_triage_source || "Recorded assessment"} · Operations confirmation required</div>
+                      {initialReviewNeedsRecheck(selectedIncident, timeline) ? (
+                        <div style={{ marginTop: 9, padding: 9, borderRadius: 9, border: "1px solid #F59E0B", background: "#FFFBEB", color: "#92400E", fontSize: 12, lineHeight: 1.45, fontWeight: 700 }}>
+                          Historical snapshot — new evidence or a priority change has been recorded since this initial review. Review the latest incident record or generate a fresh AI assessment before relying on this recommendation.
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                   <div
@@ -3133,12 +3263,77 @@ export default function App() {
                         <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.heading }}>
                           {selectedIncident.owner_team}{selectedIncident.owner_name ? ` — ${selectedIncident.owner_name}` : ""}
                         </div>
-                        <div style={{ marginTop: 8 }}>
+                        <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                           <Pill tone="green">✓ Owner assigned</Pill>
+                          <SmallActionButton
+                            onClick={() => {
+                              if (chooseDifferentOwner) {
+                                setChooseDifferentOwner(false);
+                                setAllocationNote("");
+                                setAllocationError("");
+                              } else {
+                                setAllocationTeam(selectedIncident.owner_team || "Ops Lead");
+                                setAllocationName(selectedIncident.owner_name || "");
+                                setAllocationNote("");
+                                setAllocationError("");
+                                setAllocationSuccess("");
+                                setChooseDifferentOwner(true);
+                              }
+                            }}
+                            disabled={allocating || selectedIncident.status === "resolved"}
+                          >
+                            {chooseDifferentOwner ? "Cancel change" : "Change owner"}
+                          </SmallActionButton>
                         </div>
                         <div style={{ marginTop: 8, fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
                           Assigned {formatDateTime(selectedIncident.owner_assigned_at)} by {selectedIncident.owner_assigned_by || "Operations Manager"}.
                         </div>
+
+                        {chooseDifferentOwner ? (
+                          <div style={{ marginTop: 12, padding: 12, borderRadius: 12, background: "#F8FAFC", border: `1px solid ${THEME.subtleBorder}`, display: "grid", gap: 9 }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: THEME.heading }}>
+                              Reassign incident owner
+                            </div>
+                            <div style={{ fontSize: 12, color: THEME.subtleText, lineHeight: 1.5 }}>
+                              The previous ownership decision will remain in Activity History. Stakeholder coordination and lifecycle progress will not be reset.
+                            </div>
+                            <div>
+                              <Label>New Owner Team</Label>
+                              <Select value={allocationTeam} onChange={setAllocationTeam} options={ROLES} />
+                            </div>
+                            <div>
+                              <Label>New Owner Name (optional)</Label>
+                              <input
+                                value={allocationName}
+                                onChange={(event) => setAllocationName(event.target.value)}
+                                placeholder="e.g. Priya Shah"
+                                style={InputBaseStyle(false)}
+                              />
+                            </div>
+                            <div>
+                              <Label>Handoff note</Label>
+                              <textarea
+                                value={allocationNote}
+                                onChange={(event) => setAllocationNote(event.target.value)}
+                                placeholder="Why is ownership changing, and what should the new owner take forward?"
+                                rows={3}
+                                style={{ ...InputBaseStyle(false), resize: "vertical" }}
+                              />
+                            </div>
+                            <Button
+                              onClick={() => allocateIncident(false)}
+                              disabled={allocating || !allocationNote.trim()}
+                              variant="primary"
+                            >
+                              {allocating ? "Changing Owner…" : `Confirm handoff to ${allocationTeam}`}
+                            </Button>
+                            {!allocationNote.trim() ? (
+                              <div style={{ fontSize: 11, color: THEME.subtleText }}>
+                                Add a handoff note to preserve why accountability changed.
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </>
                     ) : (
                       <div style={{ marginTop: 10, display: "grid", gap: 9 }}>
@@ -3331,7 +3526,7 @@ export default function App() {
                           setResolutionAction(event.target.value);
                           if (resolutionStartError) setResolutionStartError("");
                         }}
-                        placeholder="e.g. Engineering is validating the fix in production"
+                        placeholder="e.g. The owner is reviewing the issue and validating the agreed action"
                         disabled={startingResolution}
                         style={InputBaseStyle(startingResolution)}
                       />
@@ -3514,6 +3709,16 @@ export default function App() {
                       if (event.event_type === "resolution_started" && event.new_value) {
                         try { resolutionWork = JSON.parse(event.new_value); } catch { resolutionWork = null; }
                       }
+                      let resolvedActivityText = null;
+                      if (event.event_type === "resolved_at" && event.new_value) {
+                        resolvedActivityText = `Resolved ${formatDateTime(event.new_value)}`;
+                      }
+                      let resolutionNotesText = null;
+                      if (event.event_type === "resolution_notes") {
+                        resolutionNotesText = event.new_value && event.new_value !== "added"
+                          ? event.new_value
+                          : "Resolution summary recorded.";
+                      }
                       let aiActivityText = null;
                       if (event.event_type === "ai_assessment_generated") {
                         try {
@@ -3542,10 +3747,17 @@ export default function App() {
 
                           {allocation ? (
                             <div style={{ marginTop: 8, display: "grid", gap: 4, fontSize: 12, color: THEME.text }}>
-                              <div>
-                                Owner: <b>{allocation.owner_team}</b>{allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
-                              </div>
-                              <div>Allocated by: <b>{allocation.allocated_by}</b></div>
+                              {event.event_type === "owner_changed" ? (
+                                <div>
+                                  Owner changed from <b>{allocation.previous_owner || event.old_value || "Previous owner"}</b> to{" "}
+                                  <b>{allocation.owner_team}</b>{allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
+                                </div>
+                              ) : (
+                                <div>
+                                  Owner: <b>{allocation.owner_team}</b>{allocation.owner_name ? ` — ${allocation.owner_name}` : ""}
+                                </div>
+                              )}
+                              <div>{event.event_type === "owner_changed" ? "Changed" : "Allocated"} by: <b>{allocation.allocated_by}</b></div>
                               <div>{allocation.decision}</div>
                               <div style={{ color: THEME.subtleText }}>{allocation.reason}</div>
                             </div>
@@ -3577,7 +3789,15 @@ export default function App() {
                             <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>{aiActivityText}</div>
                           ) : null}
 
-                          {!allocation && !evidence && !stakeholders && !resolutionWork && !aiActivityText && (event.old_value || event.new_value) ? (
+                          {resolvedActivityText ? (
+                            <div style={{ marginTop: 6, fontSize: 12, color: THEME.text, fontWeight: 700 }}>{resolvedActivityText}</div>
+                          ) : null}
+
+                          {resolutionNotesText ? (
+                            <div style={{ marginTop: 6, fontSize: 12, color: THEME.text, lineHeight: 1.5 }}>{resolutionNotesText}</div>
+                          ) : null}
+
+                          {!allocation && !evidence && !stakeholders && !resolutionWork && !aiActivityText && !resolvedActivityText && !resolutionNotesText && (event.old_value || event.new_value) ? (
                             <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>
                               {event.old_value ? <span>from <b style={{ color: THEME.text }}>{event.old_value}</b> </span> : null}
                               {event.new_value ? <span>to <b style={{ color: THEME.text }}>{event.new_value}</b></span> : null}
