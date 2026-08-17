@@ -279,3 +279,90 @@
     padding: 0;
   }
 }
+
+/* Sprint 3 compact incident journey */
+.oth-compact-journey-wrap {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid #e4ebf2;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.oth-compact-journey {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.oth-compact-step {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-width: 76px;
+  text-align: center;
+}
+
+.oth-compact-marker {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  border: 2px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.oth-compact-label {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.oth-compact-step--complete .oth-compact-marker {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.oth-compact-step--complete .oth-compact-label,
+.oth-compact-step--active .oth-compact-label {
+  color: #0f172a;
+}
+
+.oth-compact-step--active .oth-compact-marker {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10);
+}
+
+.oth-compact-connector {
+  height: 2px;
+  min-width: 18px;
+  flex: 1 1 48px;
+  margin-top: 11px;
+  background: #dbe4ee;
+}
+
+.oth-compact-connector--complete {
+  background: #2563eb;
+}
+
+@media (max-width: 760px) {
+  .oth-compact-journey-wrap {
+    overflow-x: auto;
+  }
+
+  .oth-compact-journey {
+    min-width: 650px;
+  }
+}
+

@@ -243,6 +243,31 @@ function IncidentJourney({ incident, timeline }) {
   );
 }
 
+function CompactIncidentJourney({ incident, timeline }) {
+  const steps = journeyStateFor(incident, timeline);
+
+  return (
+    <div className="oth-compact-journey" aria-label="Incident lifecycle progress">
+      {steps.map((step, index) => {
+        const state = step.complete ? "complete" : step.active ? "active" : "pending";
+        return (
+          <React.Fragment key={step.key}>
+            <div className={`oth-compact-step oth-compact-step--${state}`}>
+              <div className="oth-compact-marker" aria-hidden="true">
+                {step.complete ? "✓" : index + 1}
+              </div>
+              <div className="oth-compact-label">{step.label}</div>
+            </div>
+            {index < steps.length - 1 ? (
+              <div className={`oth-compact-connector oth-compact-connector--${step.complete ? "complete" : "pending"}`} aria-hidden="true" />
+            ) : null}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function Card({ title, right, children }) {
   return (
     <div
@@ -2046,6 +2071,12 @@ export default function App() {
             </Button>
           </div>
         </div>
+
+        {workspaceSection !== "activity" ? (
+          <div className="oth-compact-journey-wrap">
+            <CompactIncidentJourney incident={selectedIncident} timeline={timeline} />
+          </div>
+        ) : null}
 
         <div
           style={{
