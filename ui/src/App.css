@@ -179,3 +179,103 @@
 @media (max-width:760px){ .oth-intake-grid-four,.oth-intake-source-grid,.oth-intake-attention-grid{grid-template-columns:1fr;} }
 .oth-provenance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 @media (max-width:760px){ .oth-provenance-grid{grid-template-columns:1fr;} }
+
+
+/* Sprint 3 incident journey */
+.oth-journey {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  padding: 8px 4px 4px;
+}
+.oth-journey-track {
+  position: absolute;
+  top: 25px;
+  left: calc(8.333% + 4px);
+  right: calc(8.333% + 4px);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbe4ee;
+}
+.oth-journey-track-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.25s ease;
+}
+.oth-journey-step {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  min-width: 0;
+  text-align: center;
+}
+.oth-journey-marker {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 3px solid #dbe4ee;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 900;
+  box-sizing: border-box;
+}
+.oth-journey-step--complete .oth-journey-marker {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+.oth-journey-step--active .oth-journey-marker {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.10);
+}
+.oth-journey-copy {
+  margin-top: 9px;
+  padding: 0 6px;
+  min-width: 0;
+}
+.oth-journey-label {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.3;
+}
+.oth-journey-detail {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.oth-journey-step--pending .oth-journey-label {
+  color: #64748b;
+}
+@media (max-width: 900px) {
+  .oth-journey {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 2px 0;
+  }
+  .oth-journey-track {
+    display: none;
+  }
+  .oth-journey-step {
+    grid-template-columns: 36px minmax(0, 1fr);
+    justify-items: stretch;
+    align-items: center;
+    gap: 10px;
+    text-align: left;
+  }
+  .oth-journey-copy {
+    margin-top: 0;
+    padding: 0;
+  }
+}

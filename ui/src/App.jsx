@@ -15,6 +15,8 @@ const API = {
   deleteIncident: (id) => `/api/incidents/${id}`,
   allocateIncident: (id) => `/api/incidents/${id}/allocate`,
   addEvidence: (id) => `/api/incidents/${id}/evidence`,
+  notifyStakeholders: (id) => `/api/incidents/${id}/stakeholders`,
+  startResolution: (id) => `/api/incidents/${id}/resolution/start`,
   assistant: "/api/ai/assistant",
 };
 
@@ -83,6 +85,8 @@ function formatTimelineEvent(eventType) {
     owner_assigned: "Incident owner assigned",
     note_added: "Note added",
     evidence_added: "Incident information added",
+    stakeholders_notified: "Stakeholders notified",
+    resolution_started: "Resolution work started",
     resolved_by: "Resolver recorded",
     resolution_notes: "Resolution notes added",
     resolved_at: "Incident resolved",
@@ -194,6 +198,49 @@ function parseTimelineAllocation(event) {
   } catch {
     return null;
   }
+}
+
+
+function journeyStateFor(incident, timeline = []) {
+  const eventTypes = new Set((timeline || []).map((event) => event.event_type));
+  const hasOwner = Boolean(incident?.owner_team) || eventTypes.has("owner_assigned");
+  const stakeholdersNotified = eventTypes.has("stakeholders_notified");
+  const resolutionStarted = eventTypes.has("resolution_started");
+  const resolved = incident?.status === "resolved" || eventTypes.has("resolved_at");
+
+  return [
+    { key: "reported", label: "Reported", detail: "Incident entered the operational queue", complete: true, active: incident?.status === "open" && !hasOwner },
+    { key: "investigating", label: "Investigating", detail: "Operational review is underway", complete: incident?.status !== "open" || eventTypes.has("status_changed"), active: incident?.status === "investigating" && !hasOwner },
+    { key: "owner", label: "Owner Assigned", detail: hasOwner ? `${incident?.owner_team || "Incident owner"}${incident?.owner_name ? ` — ${incident.owner_name}` : ""}` : "Awaiting accountable owner", complete: hasOwner, active: hasOwner && !stakeholdersNotified && !resolutionStarted && !resolved },
+    { key: "stakeholders", label: "Stakeholders", detail: stakeholdersNotified ? "Communication recorded" : "Communication not yet recorded", complete: stakeholdersNotified, active: stakeholdersNotified && !resolutionStarted && !resolved },
+    { key: "resolution", label: "Resolution Work", detail: resolutionStarted ? "Resolution action recorded" : "Resolution work not yet recorded", complete: resolutionStarted || resolved, active: resolutionStarted && !resolved },
+    { key: "resolved", label: "Resolved", detail: resolved ? "Operational lifecycle complete" : "Awaiting Operations closure", complete: resolved, active: resolved },
+  ];
+}
+
+function IncidentJourney({ incident, timeline }) {
+  const steps = journeyStateFor(incident, timeline);
+  const currentIndex = Math.max(0, steps.reduce((latest, step, index) => (step.complete || step.active ? index : latest), 0));
+
+  return (
+    <div className="oth-journey" aria-label="Incident journey">
+      <div className="oth-journey-track" aria-hidden="true">
+        <div className="oth-journey-track-fill" style={{ width: `${(currentIndex / Math.max(steps.length - 1, 1)) * 100}%` }} />
+      </div>
+      {steps.map((step, index) => {
+        const state = step.complete ? "complete" : step.active ? "active" : "pending";
+        return (
+          <div className={`oth-journey-step oth-journey-step--${state}`} key={step.key}>
+            <div className="oth-journey-marker" aria-hidden="true">{step.complete ? "✓" : index + 1}</div>
+            <div className="oth-journey-copy">
+              <div className="oth-journey-label">{step.label}</div>
+              <div className="oth-journey-detail">{step.detail}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function Card({ title, right, children }) {
@@ -461,6 +508,11 @@ export default function App() {
   const [notificationSuccess, setNotificationSuccess] = useState("");
   const [notificationError, setNotificationError] = useState("");
   const [stakeholderNote, setStakeholderNote] = useState("");
+  const [resolutionAction, setResolutionAction] = useState("");
+  const [resolutionActor, setResolutionActor] = useState("");
+  const [startingResolution, setStartingResolution] = useState(false);
+  const [resolutionStartSuccess, setResolutionStartSuccess] = useState("");
+  const [resolutionStartError, setResolutionStartError] = useState("");
   const [closureNotes, setClosureNotes] = useState("");
   const [closureOwner, setClosureOwner] = useState("Ops Lead");
   const [closureNotifyReporter, setClosureNotifyReporter] = useState(true);
@@ -658,6 +710,10 @@ export default function App() {
     setNotificationError("");
     setNotificationSuccess("");
     setStakeholderNote("");
+    setResolutionAction("");
+    setResolutionActor("");
+    setResolutionStartSuccess("");
+    setResolutionStartError("");
     setClosureNotes("");
     setClosureOwner("Ops Lead");
     setClosureNotifyReporter(true);
@@ -927,17 +983,17 @@ export default function App() {
     setNotificationSuccess("");
 
     try {
-      const statusForCoordination = selectedIncident.status === "open" ? "investigating" : selectedIncident.status;
-      await jfetch(API.patchIncident(selectedId), {
-        method: "PATCH",
+      const response = await jfetch(API.notifyStakeholders(selectedId), {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          status: statusForCoordination,
-          note: `Stakeholders notified: ${recipients.join(", ")}. Incident status: ${statusForCoordination}.${stakeholderNote.trim() ? ` Coordination note: ${stakeholderNote.trim()}` : ""}`,
+          recipients,
+          note: stakeholderNote.trim() || null,
+          recorded_by: "Operations Manager",
         }),
       });
 
-      setUStatus(statusForCoordination);
+      if (response?.incident?.status) setUStatus(response.incident.status);
       await loadAll();
       await loadTimeline(selectedId);
       setStakeholderNote("");
@@ -946,6 +1002,47 @@ export default function App() {
       setNotificationError(error.message || "Stakeholder notification could not be recorded.");
     } finally {
       setNotifyingStakeholders(false);
+    }
+  }
+
+  async function startResolutionWork() {
+    if (!selectedId || !selectedIncident) return;
+
+    const actor =
+      resolutionActor.trim() ||
+      selectedIncident.owner_name ||
+      selectedIncident.owner_team ||
+      closureOwner;
+
+    if (!resolutionAction.trim()) {
+      setResolutionStartError("Add the action currently being taken.");
+      setResolutionStartSuccess("");
+      return;
+    }
+
+    setStartingResolution(true);
+    setResolutionStartError("");
+    setResolutionStartSuccess("");
+
+    try {
+      await jfetch(API.startResolution(selectedId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: resolutionAction.trim(),
+          owner: actor,
+          recorded_by: "Operations Manager",
+        }),
+      });
+
+      await loadAll();
+      await loadTimeline(selectedId);
+      setResolutionStartSuccess(`${actor} is recorded as carrying out the resolution work.`);
+      setResolutionAction("");
+    } catch (error) {
+      setResolutionStartError(error.message || "Resolution work could not be recorded.");
+    } finally {
+      setStartingResolution(false);
     }
   }
 
@@ -3148,9 +3245,6 @@ export default function App() {
                     </div>
                   ) : null}
 
-                  <div style={{ marginTop: 14, paddingTop: 10, borderTop: `1px solid ${THEME.subtleBorder}`, fontSize: 12, color: THEME.subtleText, lineHeight: 1.55 }}>
-                    V1 records ownership, status changes, stakeholder notifications and operational notes in Activity History. Rich contributor work logs and evidence attachments remain a V2 enhancement.
-                  </div>
                 </div>
               </div>
             </div>
@@ -3178,6 +3272,59 @@ export default function App() {
                   {selectedIncident?.status === "resolved" ? "✓ Incident closed" : "Operations approval required"}
                 </Pill>
               </div>
+
+              {selectedIncident?.status !== "resolved" ? (
+                <div style={{ marginTop: 14, padding: 14, borderRadius: 12, border: "1px solid #99F6E4", background: "#FFFFFF" }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: "#0F766E", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                    Resolution work underway
+                  </div>
+                  <div style={{ marginTop: 5, fontSize: 13, color: THEME.text, lineHeight: 1.5 }}>
+                    Record the action now being carried out. The incident remains active until Operations verifies the outcome and closes it.
+                  </div>
+                  <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "0.75fr 1.25fr auto", gap: 10, alignItems: "end" }}>
+                    <div>
+                      <Label>Action owner</Label>
+                      <input
+                        value={resolutionActor}
+                        onChange={(event) => setResolutionActor(event.target.value)}
+                        placeholder={selectedIncident?.owner_name || selectedIncident?.owner_team || "Owner"}
+                        disabled={startingResolution}
+                        style={InputBaseStyle(startingResolution)}
+                      />
+                    </div>
+                    <div>
+                      <Label>Action being taken</Label>
+                      <input
+                        value={resolutionAction}
+                        onChange={(event) => {
+                          setResolutionAction(event.target.value);
+                          if (resolutionStartError) setResolutionStartError("");
+                        }}
+                        placeholder="e.g. Engineering is validating the fix in production"
+                        disabled={startingResolution}
+                        style={InputBaseStyle(startingResolution)}
+                      />
+                    </div>
+                    <Button
+                      onClick={startResolutionWork}
+                      disabled={startingResolution || !selectedIncident?.owner_team || !resolutionAction.trim()}
+                      variant="primary"
+                    >
+                      {startingResolution ? "Recording…" : "Start Resolution Work"}
+                    </Button>
+                  </div>
+                  {resolutionStartSuccess ? (
+                    <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: "#ECFDF5", border: "1px solid #A7F3D0", color: "#065F46", fontSize: 12, fontWeight: 700 }}>
+                      ✓ {resolutionStartSuccess}
+                    </div>
+                  ) : null}
+                  {resolutionStartError ? (
+                    <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: THEME.dangerBg, border: `1px solid ${THEME.dangerBorder}`, color: THEME.dangerText, fontSize: 12 }}>
+                      {resolutionStartError}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {selectedIncident?.status === "resolved" ? (
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
@@ -3288,6 +3435,21 @@ export default function App() {
             </div>
 
             <div style={{ display: workspaceSection === "activity" ? "block" : "none" }}>
+              <div style={{ display: "grid", gap: 12 }}>
+                <Card
+                  title="Incident Journey"
+                  right={
+                    selectedIncident?.status === "resolved"
+                      ? <Pill tone="green">Lifecycle complete</Pill>
+                      : <Pill tone="amber">In progress</Pill>
+                  }
+                >
+                  <div style={{ fontSize: 12, color: THEME.subtleText, marginBottom: 14, lineHeight: 1.5 }}>
+                    A visual view of where this incident is in the operational lifecycle. Activity History below remains the detailed audit record.
+                  </div>
+                  <IncidentJourney incident={selectedIncident} timeline={timeline} />
+                </Card>
+
               <Card
                 title="Activity History"
                 right={
@@ -3312,6 +3474,14 @@ export default function App() {
                       let evidence = null;
                       if (event.event_type === "evidence_added" && event.new_value) {
                         try { evidence = JSON.parse(event.new_value); } catch { evidence = null; }
+                      }
+                      let stakeholders = null;
+                      if (event.event_type === "stakeholders_notified" && event.new_value) {
+                        try { stakeholders = JSON.parse(event.new_value); } catch { stakeholders = null; }
+                      }
+                      let resolutionWork = null;
+                      if (event.event_type === "resolution_started" && event.new_value) {
+                        try { resolutionWork = JSON.parse(event.new_value); } catch { resolutionWork = null; }
                       }
                       let aiActivityText = null;
                       if (event.event_type === "ai_assessment_generated") {
@@ -3357,11 +3527,26 @@ export default function App() {
                             </div>
                           ) : null}
 
+                          {stakeholders ? (
+                            <div style={{ marginTop: 7, fontSize: 12, color: THEME.text, lineHeight: 1.5 }}>
+                              <div><b>{(stakeholders.recipients || []).join(", ")}</b></div>
+                              <div style={{ color: THEME.subtleText }}>Recorded by {stakeholders.recorded_by || "Operations Manager"}</div>
+                              {stakeholders.note ? <div style={{ marginTop: 3 }}>{stakeholders.note}</div> : null}
+                            </div>
+                          ) : null}
+
+                          {resolutionWork ? (
+                            <div style={{ marginTop: 7, fontSize: 12, color: THEME.text, lineHeight: 1.5 }}>
+                              <div><b>{resolutionWork.owner}</b> · {resolutionWork.action}</div>
+                              <div style={{ color: THEME.subtleText }}>Recorded by {resolutionWork.recorded_by || "Operations Manager"}</div>
+                            </div>
+                          ) : null}
+
                           {aiActivityText ? (
                             <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>{aiActivityText}</div>
                           ) : null}
 
-                          {!allocation && !evidence && !aiActivityText && (event.old_value || event.new_value) ? (
+                          {!allocation && !evidence && !stakeholders && !resolutionWork && !aiActivityText && (event.old_value || event.new_value) ? (
                             <div style={{ marginTop: 6, fontSize: 12, color: THEME.subtleText }}>
                               {event.old_value ? <span>from <b style={{ color: THEME.text }}>{event.old_value}</b> </span> : null}
                               {event.new_value ? <span>to <b style={{ color: THEME.text }}>{event.new_value}</b></span> : null}
@@ -3385,6 +3570,7 @@ export default function App() {
                   </div>
                 )}
               </Card>
+              </div>
             </div>
           </>
         ) : (

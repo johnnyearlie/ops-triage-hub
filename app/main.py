@@ -19,7 +19,7 @@ from app.ai import generate_ai_summary, generate_initial_triage
 DB_PATH = "ops_triage.db"
 
 PRIORITIES = ["P0", "P1", "P2", "P3"]
-STATUSES = ["open", "investigating", "mitigated", "resolved"]
+STATUSES = ["open", "investigating", "mitigated", "resolving", "resolved"]
 ROLES = ["Operations Lead", "Engineering", "Customer Support", "Sales", "Product", "Finance", "Marketing", "HR / People", "Leadership", "On-call", "Ops Lead", "Support"]
 
 SLA_MINUTES = {"P0": 30, "P1": 120, "P2": 480, "P3": 1440}
@@ -29,8 +29,9 @@ AGING_THRESHOLD_24H = 5
 
 STATUS_TRANSITIONS = {
     "open": ["investigating"],
-    "investigating": ["mitigated", "resolved"],
-    "mitigated": ["resolved"],
+    "investigating": ["mitigated", "resolving"],
+    "mitigated": ["resolving"],
+    "resolving": ["resolved"],
     "resolved": [],
 }
 
@@ -448,6 +449,18 @@ class IncidentEvidenceRequest(BaseModel):
     added_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
 
 
+class StakeholderNotificationRequest(BaseModel):
+    recipients: List[str] = Field(min_length=1)
+    note: Optional[str] = Field(default=None, max_length=5000)
+    recorded_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
+
+
+class ResolutionStartedRequest(BaseModel):
+    action: str = Field(min_length=1, max_length=5000)
+    owner: str = Field(min_length=1, max_length=120)
+    recorded_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
+
+
 # =========================================
 # App
 # =========================================
@@ -843,6 +856,151 @@ def add_incident_evidence(incident_id: str, payload: IncidentEvidenceRequest) ->
             status_code=500,
             detail=f"Incident information could not be added: {exc}",
         ) from exc
+    finally:
+        conn.close()
+
+
+@app.post("/incidents/{incident_id}/stakeholders")
+def record_stakeholder_notifications(
+    incident_id: str,
+    payload: StakeholderNotificationRequest,
+) -> Dict[str, Any]:
+    """
+    Record stakeholder coordination as a structured Activity History event.
+    This replaces the earlier generic note string while leaving the incident
+    status/ownership model unchanged.
+    """
+    recipients = [str(item).strip() for item in payload.recipients if str(item).strip()]
+    if not recipients:
+        raise HTTPException(status_code=400, detail="Select at least one stakeholder.")
+
+    note = payload.note.strip() if payload.note and payload.note.strip() else None
+    recorded_by = payload.recorded_by.strip()
+
+    conn = db()
+    try:
+        incident = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        if incident["status"] == "resolved":
+            raise HTTPException(status_code=400, detail="Resolved incidents are read-only")
+        if not _row_get(incident, "owner_team"):
+            raise HTTPException(status_code=400, detail="Assign an incident owner before recording stakeholder coordination.")
+
+        event = {
+            "recipients": recipients,
+            "note": note,
+            "recorded_by": recorded_by,
+        }
+        add_timeline(
+            conn,
+            incident_id,
+            "stakeholders_notified",
+            None,
+            json.dumps(event, ensure_ascii=False),
+        )
+
+        # Preserve the existing V1 behaviour: entering coordination moves a
+        # newly-open incident into the investigating operational state.
+        if incident["status"] == "open":
+            add_timeline(conn, incident_id, "status_changed", "open", "investigating")
+            conn.execute(
+                "UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?",
+                ("investigating", dt_to_iso(utcnow()), incident_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE incidents SET updated_at = ? WHERE id = ?",
+                (dt_to_iso(utcnow()), incident_id),
+            )
+
+        conn.commit()
+        updated = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        return {
+            "success": True,
+            "incident": incident_row_to_dict(updated),
+            "stakeholders": event,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Stakeholder coordination could not be recorded: {exc}") from exc
+    finally:
+        conn.close()
+
+
+@app.post("/incidents/{incident_id}/resolution/start")
+def start_resolution_work(
+    incident_id: str,
+    payload: ResolutionStartedRequest,
+) -> Dict[str, Any]:
+    """
+    Record that the accountable stakeholder has begun the agreed resolution
+    action. Starting resolution work moves an active investigated incident into the resolving lifecycle state.
+    """
+    action = payload.action.strip()
+    owner = payload.owner.strip()
+    recorded_by = payload.recorded_by.strip()
+
+    conn = db()
+    try:
+        incident = conn.execute(
+            "SELECT * FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        if incident["status"] == "resolved":
+            raise HTTPException(status_code=400, detail="Resolved incidents are read-only")
+        if not _row_get(incident, "owner_team"):
+            raise HTTPException(status_code=400, detail="Assign an incident owner before starting resolution work.")
+
+        event = {
+            "action": action,
+            "owner": owner,
+            "recorded_by": recorded_by,
+        }
+        add_timeline(
+            conn,
+            incident_id,
+            "resolution_started",
+            None,
+            json.dumps(event, ensure_ascii=False),
+        )
+        previous_status = incident["status"]
+        if previous_status != "resolving":
+            if previous_status not in {"investigating", "mitigated"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Resolution work cannot start while incident status is '{previous_status}'",
+                )
+            add_timeline(conn, incident_id, "status_changed", previous_status, "resolving")
+            conn.execute(
+                "UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?",
+                ("resolving", dt_to_iso(utcnow()), incident_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE incidents SET updated_at = ? WHERE id = ?",
+                (dt_to_iso(utcnow()), incident_id),
+            )
+        conn.commit()
+
+        return {
+            "success": True,
+            "resolution_work": event,
+        }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Resolution work could not be recorded: {exc}") from exc
     finally:
         conn.close()
 
