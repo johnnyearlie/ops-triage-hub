@@ -429,3 +429,14 @@
   }
 }
 
+
+/* Active Incidents: keep Operational Attention and lifecycle status as separate concepts. */
+.oth-active-filter {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .oth-active-filter {
+    width: 100%;
+  }
+}

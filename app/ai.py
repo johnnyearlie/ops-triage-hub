@@ -235,3 +235,60 @@ def generate_initial_triage(incident: dict) -> dict:
         "usage": usage,
         "summary": summary,
     }
+
+
+
+def generate_resolution_message(incident: dict, recipients: list) -> dict:
+    """Draft one concise resolution communication. Human review remains mandatory."""
+    from datetime import datetime, timezone
+
+    context = f"""
+INCIDENT TITLE:
+{incident.get('title', '')}
+
+INCIDENT DESCRIPTION:
+{incident.get('description', '')}
+
+RESOLUTION SOURCE:
+{incident.get('resolution_source', '')}
+
+ORIGINAL RESOLUTION NOTE / EVIDENCE:
+{incident.get('original_resolution_note', '')}
+
+OPERATIONS RESOLUTION SUMMARY:
+{incident.get('resolution_notes', '')}
+
+RECIPIENTS:
+{', '.join(recipients)}
+"""
+    system_prompt = """You are the Ops Triage Hub resolution communication assistant.
+Draft one short, clear operational resolution message for the listed reporter and stakeholders.
+Use only the supplied incident and resolution facts. Do not invent technical details, causes, impact,
+customer counts, actions, or assurances. Write in plain professional language suitable for Slack or email.
+State that the incident is resolved only because Operations is preparing the final closure communication.
+Return only the message text, with no heading, commentary, markdown label, or quotation marks.
+Human Operations approval and editing are required before the message is communicated."""
+
+    response = client.responses.create(
+        model="gpt-5.5",
+        input=[
+            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+            {"role": "user", "content": [{"type": "input_text", "text": context}]},
+        ],
+    )
+    usage_obj = getattr(response, "usage", None)
+    usage = None
+    if usage_obj is not None:
+        usage = {
+            "input_tokens": getattr(usage_obj, "input_tokens", None),
+            "output_tokens": getattr(usage_obj, "output_tokens", None),
+            "total_tokens": getattr(usage_obj, "total_tokens", None),
+        }
+    return {
+        "success": True,
+        "message": response.output_text.strip(),
+        "source": "OpenAI",
+        "model": getattr(response, "model", None) or "gpt-5.5",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "usage": usage,
+    }

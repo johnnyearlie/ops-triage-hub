@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.ai import generate_ai_summary, generate_initial_triage
+from app.ai import generate_ai_summary, generate_initial_triage, generate_resolution_message
 
 # =========================================
 # Config
@@ -29,8 +29,8 @@ AGING_THRESHOLD_24H = 5
 
 STATUS_TRANSITIONS = {
     "open": ["investigating"],
-    "investigating": ["mitigated", "resolving"],
-    "mitigated": ["resolving"],
+    "investigating": ["mitigated", "resolved"],
+    "mitigated": ["resolved"],
     "resolving": ["resolved"],
     "resolved": [],
 }
@@ -124,6 +124,12 @@ def init_db() -> None:
             resolved_at TEXT,
             resolved_by TEXT,
             resolution_notes TEXT,
+            resolution_source TEXT,
+            original_resolution_note TEXT,
+            resolution_communication TEXT,
+            resolution_communicated_at TEXT,
+            resolution_communicated_by TEXT,
+            resolution_recipients TEXT,
             owner_team TEXT,
             owner_name TEXT,
             owner_assigned_at TEXT,
@@ -168,6 +174,18 @@ def init_db() -> None:
         cur.execute("ALTER TABLE incidents ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
     if not _has_column(conn, "incidents", "resolution_notes"):
         cur.execute("ALTER TABLE incidents ADD COLUMN resolution_notes TEXT")
+    if not _has_column(conn, "incidents", "resolution_source"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN resolution_source TEXT")
+    if not _has_column(conn, "incidents", "original_resolution_note"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN original_resolution_note TEXT")
+    if not _has_column(conn, "incidents", "resolution_communication"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN resolution_communication TEXT")
+    if not _has_column(conn, "incidents", "resolution_communicated_at"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN resolution_communicated_at TEXT")
+    if not _has_column(conn, "incidents", "resolution_communicated_by"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN resolution_communicated_by TEXT")
+    if not _has_column(conn, "incidents", "resolution_recipients"):
+        cur.execute("ALTER TABLE incidents ADD COLUMN resolution_recipients TEXT")
     if not _has_column(conn, "incidents", "resolved_at"):
         cur.execute("ALTER TABLE incidents ADD COLUMN resolved_at TEXT")
     if not _has_column(conn, "incidents", "resolved_by"):
@@ -256,6 +274,12 @@ def incident_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "resolved_at": _row_get(row, "resolved_at"),
         "resolved_by": _row_get(row, "resolved_by"),
         "resolution_notes": _row_get(row, "resolution_notes"),
+        "resolution_source": _row_get(row, "resolution_source"),
+        "original_resolution_note": _row_get(row, "original_resolution_note"),
+        "resolution_communication": _row_get(row, "resolution_communication"),
+        "resolution_communicated_at": _row_get(row, "resolution_communicated_at"),
+        "resolution_communicated_by": _row_get(row, "resolution_communicated_by"),
+        "resolution_recipients": json.loads(_row_get(row, "resolution_recipients") or "[]"),
         "owner_team": _row_get(row, "owner_team"),
         "owner_name": _row_get(row, "owner_name"),
         "owner_assigned_at": _row_get(row, "owner_assigned_at"),
@@ -417,6 +441,8 @@ class IncidentPatch(BaseModel):
     priority: Optional[str] = None
     resolved_by: Optional[str] = None
     resolution_notes: Optional[str] = None
+    resolution_source: Optional[str] = None
+    original_resolution_note: Optional[str] = None
     note: Optional[str] = None  # free-text note at any stage
 
 
@@ -433,6 +459,16 @@ class TriageResponse(BaseModel):
 
 class AIAssistantRequest(BaseModel):
     incident_id: str = Field(min_length=1)
+
+
+class ResolutionMessageRequest(BaseModel):
+    incident_id: str = Field(min_length=1)
+
+
+class ResolutionCommunicationRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=5000)
+    recipients: List[str] = Field(min_length=1)
+    communicated_by: str = Field(default="Operations Manager", min_length=1, max_length=120)
 
 
 class IncidentAllocationRequest(BaseModel):
@@ -720,58 +756,182 @@ def patch_incident(incident_id: str, payload: IncidentPatch) -> Dict[str, Any]:
         )
 
     now = utcnow()
-
-    # Start from current DB values so partial patching works
     priority = row["priority"]
     resolved_at = row["resolved_at"]
     resolved_by = row["resolved_by"]
     resolution_notes = row["resolution_notes"]
+    resolution_source = _row_get(row, "resolution_source")
+    original_resolution_note = _row_get(row, "original_resolution_note")
+    resolution_communication = _row_get(row, "resolution_communication")
+    resolution_communicated_at = _row_get(row, "resolution_communicated_at")
+    resolution_communicated_by = _row_get(row, "resolution_communicated_by")
+    resolution_recipients = _row_get(row, "resolution_recipients")
 
-    # Optional: priority change
     if payload.priority is not None:
         new_prio = normalize_priority(payload.priority)
         if new_prio != priority:
             add_timeline(conn, incident_id, "priority_changed", priority, new_prio)
             priority = new_prio
 
-    # Optional: free-text note at any stage
     if payload.note is not None and payload.note.strip():
         add_timeline(conn, incident_id, "note_added", None, payload.note.strip())
 
-    # Resolving requires metadata
+    # Resolution evidence and Operations summary can be saved while the incident
+    # remains investigating. This does not advance the lifecycle.
+    if payload.resolution_source is not None:
+        resolution_source = payload.resolution_source.strip() or None
+    if payload.original_resolution_note is not None:
+        original_resolution_note = payload.original_resolution_note.strip() or None
+    if payload.resolution_notes is not None and new_status != "resolved":
+        resolution_notes = payload.resolution_notes.strip() or None
+
     if new_status == "resolved" and old_status != "resolved":
-        if not payload.resolved_by:
+        if not resolution_source or not original_resolution_note or not (payload.resolution_notes or resolution_notes):
             conn.close()
-            raise HTTPException(status_code=400, detail="resolved_by is required when resolving")
-        if not payload.resolution_notes or not payload.resolution_notes.strip():
+            raise HTTPException(status_code=400, detail="Complete and save the resolution evidence and summary before resolving")
+        if not resolution_communication or not resolution_communicated_at:
             conn.close()
-            raise HTTPException(status_code=400, detail="resolution_notes is required when resolving")
+            raise HTTPException(status_code=400, detail="Mark the resolution communication as communicated before resolving")
 
-        resolved_by = normalize_role(payload.resolved_by)
-        resolution_notes = payload.resolution_notes.strip()
+        # V1: Operations owns the final closure decision. Authentication is not
+        # part of the demo, so the acting user is recorded consistently here.
+        resolved_by = "Operations Manager"
+        resolution_notes = (payload.resolution_notes or resolution_notes).strip()
         resolved_at = dt_to_iso(now)
-
         add_timeline(conn, incident_id, "resolved_by", row["resolved_by"], resolved_by)
         add_timeline(conn, incident_id, "resolution_notes", None, resolution_notes)
         add_timeline(conn, incident_id, "resolved_at", row["resolved_at"], resolved_at)
 
-    # Status change timeline
     if new_status != old_status:
         add_timeline(conn, incident_id, "status_changed", old_status, new_status)
 
     conn.execute(
         """
         UPDATE incidents
-        SET priority = ?, status = ?, updated_at = ?, resolved_at = ?, resolved_by = ?, resolution_notes = ?
+        SET priority = ?, status = ?, updated_at = ?, resolved_at = ?, resolved_by = ?,
+            resolution_notes = ?, resolution_source = ?, original_resolution_note = ?,
+            resolution_communication = ?, resolution_communicated_at = ?, resolution_communicated_by = ?, resolution_recipients = ?
         WHERE id = ?
         """,
-        (priority, new_status, dt_to_iso(now), resolved_at, resolved_by, resolution_notes, incident_id),
+        (priority, new_status, dt_to_iso(now), resolved_at, resolved_by,
+         resolution_notes, resolution_source, original_resolution_note,
+         resolution_communication, resolution_communicated_at, resolution_communicated_by, resolution_recipients, incident_id),
     )
     conn.commit()
 
     out = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     conn.close()
     return incident_row_to_dict(out)
+
+
+def _resolution_recipients(conn: sqlite3.Connection, incident: sqlite3.Row) -> List[str]:
+    """Reporter plus stakeholders already coordinated. Supports legacy V1 note events."""
+    recipients: List[str] = []
+    reporter = (_row_get(incident, "reporter_name") or "").strip()
+    if reporter:
+        recipients.append(f"Original reporter — {reporter}")
+
+    events = conn.execute(
+        "SELECT event_type, new_value FROM timeline WHERE incident_id = ? ORDER BY created_at ASC",
+        (incident["id"],),
+    ).fetchall()
+    for event in events:
+        value = event["new_value"] or ""
+        if event["event_type"] == "stakeholders_notified":
+            parsed = _parse_json_object(value) or {}
+            for item in parsed.get("recipients", []):
+                name = str(item).strip()
+                if name and name not in recipients:
+                    recipients.append(name)
+        elif event["event_type"] == "note_added" and value.startswith("Stakeholders notified:"):
+            # Compatibility for incidents coordinated before the structured endpoint was wired in.
+            first = value.split(". Incident status:", 1)[0]
+            raw = first.replace("Stakeholders notified:", "", 1)
+            for item in raw.split(","):
+                name = item.strip()
+                if name and name not in recipients:
+                    recipients.append(name)
+    return recipients
+
+
+@app.get("/incidents/{incident_id}/resolution/recipients")
+def get_resolution_recipients(incident_id: str) -> Dict[str, Any]:
+    conn = db()
+    try:
+        incident = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        return {"recipients": _resolution_recipients(conn, incident)}
+    finally:
+        conn.close()
+
+
+@app.post("/ai/resolution-message")
+def ai_resolution_message(payload: ResolutionMessageRequest) -> Dict[str, Any]:
+    conn = db()
+    try:
+        incident = conn.execute("SELECT * FROM incidents WHERE id = ?", (payload.incident_id,)).fetchone()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        data = incident_row_to_dict(incident)
+        if not data.get("resolution_source") or not data.get("original_resolution_note") or not data.get("resolution_notes"):
+            raise HTTPException(status_code=400, detail="Save the resolution evidence and Operations summary before generating the message")
+        recipients = _resolution_recipients(conn, incident)
+        return generate_resolution_message(data, recipients)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Resolution message assistant unavailable: {exc}") from exc
+    finally:
+        conn.close()
+
+
+@app.post("/incidents/{incident_id}/resolution/communicate")
+def mark_resolution_communicated(incident_id: str, payload: ResolutionCommunicationRequest) -> Dict[str, Any]:
+    message = payload.message.strip()
+    recipients = [str(item).strip() for item in payload.recipients if str(item).strip()]
+    if not message:
+        raise HTTPException(status_code=400, detail="Resolution communication message is required")
+    if not recipients:
+        raise HTTPException(status_code=400, detail="Resolution communication recipients are required")
+
+    conn = db()
+    try:
+        incident = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        if incident["status"] == "resolved":
+            raise HTTPException(status_code=400, detail="Resolved incidents are read-only")
+        if not _row_get(incident, "resolution_source") or not _row_get(incident, "original_resolution_note") or not _row_get(incident, "resolution_notes"):
+            raise HTTPException(status_code=400, detail="Save the resolution evidence and Operations summary first")
+        if _row_get(incident, "resolution_communicated_at"):
+            raise HTTPException(status_code=400, detail="Resolution communication is already locked")
+
+        communicated_at = dt_to_iso(utcnow())
+        communicated_by = payload.communicated_by.strip()
+        recipients_json = json.dumps(recipients, ensure_ascii=False)
+        conn.execute(
+            """UPDATE incidents SET resolution_communication = ?, resolution_communicated_at = ?,
+               resolution_communicated_by = ?, resolution_recipients = ?, updated_at = ? WHERE id = ?""",
+            (message, communicated_at, communicated_by, recipients_json, communicated_at, incident_id),
+        )
+        add_timeline(conn, incident_id, "resolution_communicated", None, json.dumps({
+            "recipients": recipients,
+            "message": message,
+            "communicated_by": communicated_by,
+            "communicated_at": communicated_at,
+        }, ensure_ascii=False))
+        conn.commit()
+        updated = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        return {"success": True, "incident": incident_row_to_dict(updated)}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Resolution communication could not be recorded: {exc}") from exc
+    finally:
+        conn.close()
 
 
 @app.post("/incidents/{incident_id}/evidence")
@@ -930,77 +1090,6 @@ def record_stakeholder_notifications(
     except Exception as exc:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Stakeholder coordination could not be recorded: {exc}") from exc
-    finally:
-        conn.close()
-
-
-@app.post("/incidents/{incident_id}/resolution/start")
-def start_resolution_work(
-    incident_id: str,
-    payload: ResolutionStartedRequest,
-) -> Dict[str, Any]:
-    """
-    Record that the accountable stakeholder has begun the agreed resolution
-    action. Starting resolution work moves an active investigated incident into the resolving lifecycle state.
-    """
-    action = payload.action.strip()
-    owner = payload.owner.strip()
-    recorded_by = payload.recorded_by.strip()
-
-    conn = db()
-    try:
-        incident = conn.execute(
-            "SELECT * FROM incidents WHERE id = ?",
-            (incident_id,),
-        ).fetchone()
-        if not incident:
-            raise HTTPException(status_code=404, detail="Incident not found")
-        if incident["status"] == "resolved":
-            raise HTTPException(status_code=400, detail="Resolved incidents are read-only")
-        if not _row_get(incident, "owner_team"):
-            raise HTTPException(status_code=400, detail="Assign an incident owner before starting resolution work.")
-
-        event = {
-            "action": action,
-            "owner": owner,
-            "recorded_by": recorded_by,
-        }
-        add_timeline(
-            conn,
-            incident_id,
-            "resolution_started",
-            None,
-            json.dumps(event, ensure_ascii=False),
-        )
-        previous_status = incident["status"]
-        if previous_status != "resolving":
-            if previous_status not in {"investigating", "mitigated"}:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Resolution work cannot start while incident status is '{previous_status}'",
-                )
-            add_timeline(conn, incident_id, "status_changed", previous_status, "resolving")
-            conn.execute(
-                "UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?",
-                ("resolving", dt_to_iso(utcnow()), incident_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE incidents SET updated_at = ? WHERE id = ?",
-                (dt_to_iso(utcnow()), incident_id),
-            )
-        conn.commit()
-
-        return {
-            "success": True,
-            "resolution_work": event,
-        }
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception as exc:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Resolution work could not be recorded: {exc}") from exc
     finally:
         conn.close()
 
@@ -1553,6 +1642,8 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
     p0_resolved_count = 0
     resolved_under_24h_count = 0
     resolved_under_48h_count = 0
+    resolved_within_sla_count = 0
+    sla_eligible_count = 0
     mttrs: List[int] = []
     by_role: Dict[str, int] = {}
 
@@ -1565,15 +1656,30 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
         if cdt and rdt and rdt >= cdt:
             resolution_minutes = minutes_between(cdt, rdt)
             mttrs.append(resolution_minutes)
+
             if resolution_minutes < 24 * 60:
                 resolved_under_24h_count += 1
             if resolution_minutes < 48 * 60:
                 resolved_under_48h_count += 1
 
+            # SLA attainment is measured across resolved incidents in the
+            # selected reporting window. Each incident is assessed against
+            # the SLA associated with its priority.
+            sla_minutes = SLA_MINUTES.get(r["priority"])
+            if sla_minutes is not None:
+                sla_eligible_count += 1
+                if resolution_minutes <= sla_minutes:
+                    resolved_within_sla_count += 1
+
         role = (r["resolved_by"] or "").strip() or "Unassigned"
         by_role[role] = by_role.get(role, 0) + 1
 
     avg_mttr = int(sum(mttrs) / len(mttrs)) if mttrs else None
+    sla_attainment_pct = (
+        round((resolved_within_sla_count / sla_eligible_count) * 100, 1)
+        if sla_eligible_count
+        else None
+    )
 
     top_resolvers = sorted(
         [{"role": k, "resolved": v} for k, v in by_role.items()],
@@ -1588,6 +1694,9 @@ def ops_kpis(days: int = Query(default=7, ge=1, le=90)) -> Dict[str, Any]:
         "p0_resolved_count": p0_resolved_count,
         "resolved_under_24h_count": resolved_under_24h_count,
         "resolved_under_48h_count": resolved_under_48h_count,
+        "resolved_within_sla_count": resolved_within_sla_count,
+        "sla_eligible_count": sla_eligible_count,
+        "sla_attainment_pct": sla_attainment_pct,
         "avg_mttr_minutes": avg_mttr,
         "top_resolvers": top_resolvers,
     }

@@ -41,6 +41,9 @@ When analysing an incident consider:
 • Operational bottlenecks
 • Tactical actions
 • Strategic actions
+• The most appropriate incident owner team for the current evidence
+• Why that team is the best operational owner
+• How reliable the owner recommendation is based on the evidence available
 • Whether recommendations scale if repeated
 • Risks introduced by the proposed actions
 • Long-term operational improvements
@@ -86,10 +89,27 @@ Return JSON using EXACTLY this structure.
     "string"
   ],
 
+  "recommended_incident_owner": {
+    "owner": "Operations Lead | Engineering | Customer Support | Sales | Product | Finance | Marketing | HR / People | Leadership | On-call | Ops Lead | Support",
+    "reason": "string",
+    "recommendation_reliability": "Limited | Moderate | Strong"
+  },
+
   "confidence": "Low | Medium | High",
 
   "confidence_reason": "string"
 }
+
+The recommended_incident_owner field is REQUIRED.
+Choose exactly one owner value from the allowed owner list shown in the schema.
+Base the recommendation only on the incident evidence and timeline.
+The reason must briefly explain why that team is the best owner for progressing the incident.
+Use recommendation_reliability to express the strength of the ownership recommendation:
+- Strong: evidence clearly identifies the responsible functional team.
+- Moderate: the evidence points to a likely team but some ownership detail is missing.
+- Limited: ownership is uncertain, but choose the best available team and explain the uncertainty.
+Never invent a named individual. The recommendation is for an owner team only.
+The recommendation remains optional decision support and does not assign the incident.
 
 Do not include markdown.
 
