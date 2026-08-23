@@ -1,163 +1,288 @@
 # Ops Triage Hub
 
-**Ops Triage Hub** is a small end-to-end demo showcasing an operations-focused incident triage and management workflow.
+**Operational Decision Support for growing teams**
 
-It combines:
-- A **FastAPI backend** (incident data, health scoring, KPIs, timelines)
-- A **React (Vite) frontend** for visual triage, updates, and insights
+Ops Triage Hub is a working V1 portfolio prototype that turns operational incidents into a structured, accountable workflow — from the first report through investigation, coordination and resolution.
 
-This project is intentionally lightweight and opinionated. It is designed as:
-- A personal demo
-- A portfolio artefact
-- A sandbox for ops + AI + UX experimentation
+It combines structured operational workflows with AI-assisted decision support while keeping operational judgement and control with the human operator.
 
----
+## 🎥 Product Walkthrough
 
-## ✨ What This Demo Shows
-- Operational health scoring (Green / Amber / Red)
-- Active vs resolved incident tracking
-- Incident lifecycle management (open → investigating → mitigated → resolved)
-- Timeline-based audit trail (status changes, notes, resolution context)
-- Simple KPI reporting (MTTR, resolution counts, top resolvers)
-- A clean, calm ops-focused UI (not a ticketing system clone)
+**Watch the complete Ops Triage Hub V1 walkthrough:**
 
-Lightweight Intelligence (AI-Assisted)
-This demo includes lightweight, explainable intelligence designed to support — not replace — operational decision-making.
+https://youtu.be/cCa3qeFOU7c
 
-Current capabilities include:
-- AI-assisted incident triage (suggested priority, rationale, next steps)
-- Ranked “What to do next” operational recommendations based on system health
-- Deterministic, explainable logic suitable for high-trust ops environments
+The walkthrough follows a realistic incident from initial reporting through AI-assisted triage, investigation, reassessment, ownership, stakeholder coordination and final resolution.
 
-The emphasis is on calm decision support and transparency rather than automation or opaque “AI magic”.
-
-This is **not** intended to be production-ready — it is a **conceptual ops demo**.
+**Portfolio:** https://www.johnnyearlie.com  
+**Source:** https://github.com/johnnyearlie/ops-triage-hub
 
 ---
 
-## 🧱 Tech Stack
+## What Ops Triage Hub Does
 
-### Backend
-- Python 3
-- FastAPI
-- SQLite (local, file-based)
-- Pydantic models
+Operational incidents often arrive through fragmented channels, leaving Operations to reconstruct context, determine priority, coordinate ownership, keep stakeholders informed and maintain a reliable record of what happened.
 
-### Frontend
-- React
-- Vite
-- Plain CSS (no UI framework)
-- Fetch-based API calls
+Ops Triage Hub brings that work into one incident lifecycle:
+
+**Report → Initial AI Triage → Investigation → AI Operational Assessment → New Evidence & Reassessment → Ownership → Stakeholder Coordination → Resolution**
+
+Activity History retains the evidence, decisions and actions generated throughout that lifecycle.
+
+The aim is not to automate the Operations Manager out of the process. AI provides structured recommendations and analysis; the human operator reviews the evidence and remains responsible for operational decisions.
 
 ---
 
-## 📂 Project Structure
+## Core V1 Workflow
+
+### 1. Report an Operational Issue
+
+The reporter records the original issue, source, urgency and supporting context.
+
+The original report becomes part of the incident record and remains available as the investigation develops.
+
+### 2. Initial AI Triage
+
+AI analyses the reported evidence and provides:
+
+- Suggested priority
+- Operational rationale
+- Business impact
+- Recommended next steps
+
+The recommendation is decision support. Operations confirms the priority and decides whether the incident moves into investigation.
+
+### 3. Investigation
+
+Once confirmed, the incident moves into active investigation.
+
+Operations can add new evidence without replacing the information already recorded, allowing the incident record to develop as the team learns more.
+
+### 4. AI Operational Assessment
+
+A deeper assessment structures the available evidence into:
+
+- Executive Summary
+- Business impact
+- Recommended actions
+- Operational risks
+- Assumptions
+- Missing information
+- Assessment reliability
+
+The assessment explicitly separates established information from uncertainty rather than presenting every inference as fact.
+
+### 5. Evidence & Reassessment
+
+As new evidence becomes available, Operations can regenerate the assessment against the updated operational picture.
+
+This allows recommendations and understanding to change as the facts change while retaining the history of how the incident developed.
+
+### 6. Ownership
+
+OTH can recommend the most appropriate team based on the incident evidence.
+
+The recommendation remains optional. Operations reviews it before assigning a named owner and recording accountability.
+
+### 7. Stakeholder Coordination
+
+Ownership and communication are tracked separately.
+
+Operations records which stakeholders require visibility, creating a structured record of who was coordinated and why.
+
+### 8. Resolution
+
+When the responsible team confirms the fix:
+
+- Original resolution evidence is retained
+- Operations records a plain-language Resolution Summary
+- Previously coordinated stakeholders can be carried into resolution communication
+- OTH prepares an editable AI-assisted closure message
+- Operations reviews and approves what is communicated
+- The incident can then be marked resolved
+
+Resolved incidents are protected from further operational editing while remaining available for review.
+
+### 9. Activity History
+
+Activity History preserves the sequence of evidence, decisions and actions across the incident lifecycle, creating an operational audit trail that remains available after closure.
+
+---
+
+## AI as Decision Support
+
+AI is intentionally positioned as a supporting capability rather than an autonomous decision-maker.
+
+Across the V1 workflow it can assist with:
+
+- Initial incident triage
+- Operational assessment
+- Identification of missing information and assumptions
+- Reassessment as new evidence arrives
+- Ownership recommendations
+- Resolution communication
+
+Recommendations remain reviewable and editable where appropriate.
+
+The design principle is:
+
+**AI supports the decision. Operations owns the decision.**
+
+---
+
+## Operational Dashboard
+
+The dashboard provides a shared view of operational health and current work, including:
+
+- Operational Health
+- Morning Stand-Up Focus
+- Needs Attention
+- Revenue Forecast
+- Active Incidents
+- Resolved Incidents
+- Incident status and priority
+- Incident review and Activity History
+
+The interface is intentionally designed as an operational control surface rather than a conventional ticketing-system clone.
+
+---
+
+## Tech Stack
+
+### Application
+
+- **React**
+- **Vite**
+- **JavaScript**
+- **HTML / CSS**
+- **Python**
+- **FastAPI**
+- **SQLite**
+- **OpenAI API**
+
+### Product & Demo
+
+- **Figma**
+- **DaVinci Resolve**
+
+---
+
+## Project Structure
+
+```text
 ops-triage-hub/
-├── app/                # FastAPI backend
-│   └── main.py
-├── ui/                 # React frontend (Vite)
+├── app/
+│   ├── main.py
+│   ├── ai.py
+│   └── prompts.py
+├── ui/
 │   ├── src/
-│   │   └── App.jsx
+│   │   ├── App.jsx
+│   │   └── components/
 │   └── index.html
 ├── requirements.txt
-├── ops_triage.db       # Local SQLite DB (demo data)
+├── ops_triage.db
 └── README.md
+```
+
 ---
 
-## ▶️ Running the Demo Locally
+## Running Locally
 
-### 1. Backend (FastAPI)
+### Backend
 
-From the repo root:
+From the repository root:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+```
 
-Backend will run on:
+Backend:
+
+```text
 http://127.0.0.1:8000
+```
 
-Interactive API docs:
+Interactive API documentation:
+
+```text
 http://127.0.0.1:8000/docs
+```
 
-2. Frontend (React UI)
+### Frontend
 
 In a second terminal:
+
+```bash
 cd ui
 npm install
 npm run dev
+```
 
-UI will run on:
+Frontend:
+
+```text
 http://localhost:5173
-The Vite dev server proxies /api/* requests to the FastAPI backend
+```
 
-🧭 Demo Walkthrough Flow
+The Vite development server proxies `/api/*` requests to the FastAPI backend.
 
-Suggested order when demoing:
-	1.	Operational Health
-	•	View current health score (Green / Amber / Red)
-	•	Read the generated summary
-	2.	Active Incidents
-	•	Select an incident from the active list
-	•	Observe priority, status, and creation time
-	3.	Update Incident
-	•	Change status (e.g. investigating → mitigated → resolved)
-	•	Add timeline notes
-	•	Assign resolver + resolution notes when resolving
-	•	Toggle the timeline view to see audit history
-	4.	KPIs
-	•	Adjust KPI window (7 / 30 / 90 days)
-	•	Review MTTR and resolver stats
-	5.	Create Incident
-	•	Create a new incident
-	•	Optionally run triage suggestions
-	•	Watch it appear immediately in Active Incidents
+---
 
-⸻
+## Design Principles
 
-🎯 Design Philosophy
-	•	Calm, low-noise UI
-	•	Ops-first mental model
-	•	Timeline over comments
-	•	Clear state transitions
-	•	No unnecessary complexity
+- Operations first, technology second
+- Human accountability for operational decisions
+- Preserve original evidence
+- Add context rather than overwrite history
+- Make uncertainty visible
+- Reassess when the evidence changes
+- Separate ownership from communication
+- Maintain an auditable incident history
+- Keep the interface calm and operationally focused
 
-This is closer to an ops control surface than a ticketing tool.
+---
 
-⸻
+## V1 Scope & Limitations
 
-🚧 Known Limitations
-	•	No authentication
-	•	Single-user demo
-	•	SQLite only
-	•	No background jobs
-	•	No persistence guarantees
+Ops Triage Hub V1 is a portfolio prototype, not a production incident-management platform.
 
-All intentional for v1.0.
+Current limitations include:
 
-⸻
+- No authentication or role-based access control
+- Single-user/local demo environment
+- SQLite persistence
+- No external Slack, CRM or monitoring integrations
+- No background job infrastructure
+- No production deployment architecture
 
-📌 Status
+These constraints are intentional for the V1 prototype.
 
-v1.0 — Stable local demo
+---
 
-This version is considered complete for its current purpose.
-Future work may include:
-• Narrative explanations for health score changes
-• Actor attribution per timeline event
-• AI-generated incident and timeline summaries (LLM-assisted)
+## Status
 
-⸻
+**V1 complete.**
 
-👤 Author
+The complete incident lifecycle is implemented and demonstrated in the product walkthrough.
 
-Built by Johnny Earlie
+The project is intended to demonstrate operational problem-solving, workflow design, human-centred AI decision support and the translation of those ideas into a working full-stack prototype.
+
+---
+
+## Author
+
+**Johnny Earlie**  
+Operations & Process Improvement  
 Berlin, Germany
 
-⸻
+Portfolio: https://www.johnnyearlie.com
 
-📜 License
+---
 
-MIT — use freely for learning and experimentation.
+## License
+
+MIT — available for learning and experimentation.
