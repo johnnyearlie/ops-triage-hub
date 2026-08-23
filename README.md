@@ -285,4 +285,6 @@ Portfolio: https://www.johnnyearlie.com
 
 ## License
 
-MIT — available for learning and experimentation.
+Copyright
+© 2026 Johnny Earlie. All rights reserved.
+Ops Triage Hub is a portfolio project. The source code is publicly available for review and demonstration purposes.
